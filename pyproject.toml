@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latency-checker"
+version = "0.1.0"
+description = "Audio analysis tool for measuring speech, silence, and latency in mono/stereo recordings"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Audio Analyzer Contributors"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "librosa>=0.10.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "soundfile>=0.12.0",
+    "click>=8.1.0",
+    "pydub>=0.25.0",
+]
+
+[project.scripts]
+audio-analyze = "latency_checker.cli:main"
+audio-split = "latency_checker.cli:main_split"
+latency-ui = "latency_checker.cli:main_ui"
+
+[project.optional-dependencies]
+diarize = [
+    "resemblyzer>=0.1.3",
+    "scipy>=1.10.0",
+]
+web = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "python-multipart>=0.0.9",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "flake8>=5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+latency_checker = ["py.typed", "web/static/*.html", "web/static/*.css", "web/static/*.js"]

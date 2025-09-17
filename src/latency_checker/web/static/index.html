@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Latency Analyzer</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1117;
+    color: #e6e8eb;
+    margin: 0;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
+  .subtitle { color: #8892a0; font-size: 13px; margin-bottom: 24px; }
+
+  .drop-zone {
+    border: 2px dashed #2a3040;
+    border-radius: 10px;
+    padding: 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: #151926;
+  }
+  .drop-zone:hover, .drop-zone.drag {
+    border-color: #4f7dff;
+    background: #171e2e;
+  }
+  .drop-zone p { margin: 0; color: #8892a0; }
+  .drop-zone input { display: none; }
+
+  .controls { display: flex; gap: 12px; margin: 16px 0; align-items: center; flex-wrap: wrap; }
+  .controls label { font-size: 12px; color: #8892a0; }
+  .controls input[type=number] {
+    background: #151926;
+    border: 1px solid #2a3040;
+    color: #e6e8eb;
+    padding: 4px 8px;
+    border-radius: 4px;
+    width: 80px;
+    font-size: 13px;
+  }
+
+  button {
+    background: #4f7dff;
+    color: white;
+    border: 0;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background 0.15s;
+  }
+  button:hover { background: #3f6ae0; }
+  button:disabled { background: #2a3040; cursor: not-allowed; }
+  button.secondary { background: #1e2433; }
+  button.secondary:hover { background: #2a3040; }
+
+  .result { margin-top: 24px; display: none; }
+  .result.active { display: block; }
+
+  .waveform-container {
+    background: #151926;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  #waveform { margin-bottom: 8px; }
+  .legend {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: #8892a0;
+    margin-top: 8px;
+    align-items: center;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+  }
+  .ai-color { background: rgba(79, 125, 255, 0.45); }
+  .human-color { background: rgba(255, 149, 64, 0.45); }
+  .latency-color { background: #ff5571; }
+
+  .player {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin: 12px 0;
+  }
+  .time {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    color: #8892a0;
+  }
+
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .panel {
+    background: #151926;
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .panel h3 {
+    margin: 0 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #8892a0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 14px;
+    border-bottom: 1px solid #1e2433;
+  }
+  .stat-row:last-child { border-bottom: 0; }
+  .stat-label { color: #8892a0; }
+  .stat-value { font-family: "SF Mono", Menlo, monospace; }
+
+  .segments-list { max-height: 280px; overflow-y: auto; }
+  .segment-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+  }
+  .segment-item:hover { background: #1e2433; }
+  .segment-item.ai { border-left: 3px solid #4f7dff; }
+  .segment-item.human { border-left: 3px solid #ff9540; }
+  .segment-item.latency { border-left: 3px solid #ff5571; }
+  .segment-time { font-family: "SF Mono", Menlo, monospace; color: #8892a0; }
+
+  .error {
+    background: #3a1e22;
+    color: #ff9ba8;
+    padding: 12px;
+    border-radius: 6px;
+    margin: 12px 0;
+    font-size: 14px;
+  }
+
+  .loading {
+    text-align: center;
+    padding: 40px;
+    color: #8892a0;
+  }
+  .spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #2a3040;
+    border-top-color: #4f7dff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Audio Latency Analyzer</h1>
+  <div class="subtitle">Upload a stereo or mono recording to visualize AI/Human turn-taking and response latencies.</div>
+
+  <div class="drop-zone" id="dropzone">
+    <input type="file" id="file-input" accept=".wav,.mp3,.mp4,.m4a,.flac,.ogg,.aac">
+    <p><strong>Drop an audio file here</strong> or click to browse</p>
+    <p style="font-size: 12px; margin-top: 4px;">WAV, MP3, MP4, M4A, FLAC, OGG, AAC</p>
+  </div>
+
+  <div class="controls">
+    <label>Threshold: <input type="number" id="threshold" value="50" step="10"></label>
+    <label>Min silence (ms): <input type="number" id="min-silence" value="500" step="100"></label>
+  </div>
+
+  <div id="error-msg"></div>
+  <div id="loading" style="display:none;" class="loading"><span class="spinner"></span>Analyzing...</div>
+
+  <div class="result" id="result">
+    <div class="waveform-container">
+      <div id="waveform"></div>
+      <div class="player">
+        <button id="play-btn">▶ Play</button>
+        <button id="prev-latency" class="secondary">◀ Prev latency</button>
+        <button id="next-latency" class="secondary">Next latency ▶</button>
+        <span class="time" id="time-display">0:00 / 0:00</span>
+        <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
+          <span style="display:flex; align-items:center; gap:6px;">
+            <span style="font-size:12px; color:#8892a0;">Zoom</span>
+            <input type="range" id="zoom" min="20" max="400" value="100" style="width:140px;">
+          </span>
+          <button id="clear-btn" class="secondary" title="Remove from cache and reset">Clear</button>
+        </span>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-swatch ai-color"></div>AI</div>
+        <div class="legend-item"><div class="legend-swatch human-color"></div>Human</div>
+        <div class="legend-item"><div class="legend-swatch latency-color"></div>Latency marker</div>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="panel">
+        <h3>Statistics</h3>
+        <div id="stats"></div>
+      </div>
+      <div class="panel">
+        <h3>Latencies</h3>
+        <div class="segments-list" id="latencies-list"></div>
+      </div>
+      <div class="panel">
+        <h3>AI Segments</h3>
+        <div class="segments-list" id="ai-list"></div>
+      </div>
+      <div class="panel">
+        <h3>Human Segments</h3>
+        <div class="segments-list" id="human-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/wavesurfer.js@7"></script>
+<script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+const errorMsg = document.getElementById('error-msg');
+const loading = document.getElementById('loading');
+const result = document.getElementById('result');
+const playBtn = document.getElementById('play-btn');
+const timeDisplay = document.getElementById('time-display');
+
+let wavesurfer = null;
+let regions = null;
+let currentLatencies = [];
+
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropzone.classList.remove('drag');
+  if (e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files[0]) uploadFile(e.target.files[0]);
+});
+
+// Spacebar toggles play/pause, except when typing in an input field
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space') return;
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (!wavesurfer) return;
+  e.preventDefault();
+  wavesurfer.playPause();
+  playBtn.textContent = wavesurfer.isPlaying() ? '❚❚ Pause' : '▶ Play';
+});
+
+async function sha1Hex(file) {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest('SHA-1', buf);
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function uploadFile(file) {
+  errorMsg.innerHTML = '';
+  loading.style.display = 'block';
+  result.classList.remove('active');
+
+  const threshold = document.getElementById('threshold').value;
+  const minSilence = document.getElementById('min-silence').value;
+
+  try {
+    // Hash the file locally first. If the server already has a cached
+    // analysis for this exact content + params, skip the upload entirely.
+    loading.querySelector('.spinner')?.nextSibling;
+    loading.innerHTML = '<span class="spinner"></span>Hashing file...';
+    const hash = await sha1Hex(file);
+
+    loading.innerHTML = '<span class="spinner"></span>Checking cache...';
+    const params = `hash=${hash}&threshold=${threshold}&min_silence_ms=${minSilence}&filename=${encodeURIComponent(file.name)}`;
+    const cacheResp = await fetch(`check_cache?${params}`);
+    if (cacheResp.ok) {
+      const data = await cacheResp.json();
+      console.log('[latency-ui] cache hit — skipped upload');
+      render(data);
+      return;
+    }
+
+    console.log('[latency-ui] cache miss — uploading');
+    loading.innerHTML = '<span class="spinner"></span>Uploading & analyzing...';
+    const form = new FormData();
+    form.append('file', file);
+    const resp = await fetch(`analyze?threshold=${threshold}&min_silence_ms=${minSilence}`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Analysis failed');
+    }
+    const data = await resp.json();
+    render(data);
+  } catch (e) {
+    errorMsg.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+  } finally {
+    loading.style.display = 'none';
+    loading.innerHTML = '<span class="spinner"></span>Analyzing...';
+  }
+}
+
+function formatTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60).toString().padStart(2, '0');
+  return `${m}:${sec}`;
+}
+
+function render(data) {
+  if (wavesurfer) wavesurfer.destroy();
+
+  regions = WaveSurfer.Regions.create();
+
+  const isStereo = data.file_info && data.file_info.is_stereo;
+
+  const opts = {
+    container: '#waveform',
+    waveColor: '#3a4556',
+    progressColor: '#6b7b95',
+    cursorColor: '#e6e8eb',
+    height: isStereo ? 80 : 120,
+    barWidth: 2,
+    barGap: 1,
+    minPxPerSec: 100,
+    autoScroll: true,
+    autoCenter: true,
+    plugins: [regions],
+  };
+  if (isStereo) {
+    opts.splitChannels = [
+      { waveColor: 'rgba(255, 149, 64, 0.8)', progressColor: 'rgba(255, 149, 64, 1.0)' },
+      { waveColor: 'rgba(79, 125, 255, 0.8)', progressColor: 'rgba(79, 125, 255, 1.0)' },
+    ];
+  }
+
+  wavesurfer = WaveSurfer.create(opts);
+
+
+  // Resolve against current page URL so it works under any path prefix
+  // (e.g. when served via a reverse proxy at /latency/)
+  const audioUrl = new URL(data.audio_url, window.location.href).href;
+  console.log('[latency-ui] loading audio from:', audioUrl);
+
+  // Fetch as blob ourselves so failures surface with real HTTP status
+  fetch(audioUrl)
+    .then(r => {
+      console.log('[latency-ui] audio fetch status:', r.status, r.headers.get('content-type'));
+      if (!r.ok) throw new Error(`audio fetch ${r.status}: ${r.statusText}`);
+      return r.blob();
+    })
+    .then(blob => {
+      console.log('[latency-ui] audio blob size:', blob.size, 'type:', blob.type);
+      const blobUrl = URL.createObjectURL(blob);
+      wavesurfer.load(blobUrl);
+    })
+    .catch(e => {
+      console.error('[latency-ui] audio load failed:', e);
+      errorMsg.innerHTML = `<div class="error">Audio load failed: ${e.message}</div>`;
+    });
+
+  wavesurfer.on('ready', () => {
+    // AI segments (blue regions)
+    data.ai_segments.forEach(seg => {
+      regions.addRegion({
+        start: seg.start,
+        end: seg.end,
+        color: 'rgba(79, 125, 255, 0.2)',
+        drag: false,
+        resize: false,
+        content: 'AI',
+      });
+    });
+    // Human segments (orange regions)
+    data.human_segments.forEach(seg => {
+      regions.addRegion({
+        start: seg.start,
+        end: seg.end,
+        color: 'rgba(255, 149, 64, 0.2)',
+        drag: false,
+        resize: false,
+        content: 'H',
+      });
+    });
+    // Latency markers (thin red regions)
+    data.latencies.forEach(lat => {
+      regions.addRegion({
+        start: lat.human_stop,
+        end: lat.ai_start,
+        color: 'rgba(255, 85, 113, 0.45)',
+        drag: false,
+        resize: false,
+        content: `${lat.latency.toFixed(2)}s`,
+      });
+    });
+    updateTimeDisplay();
+  });
+
+  wavesurfer.on('audioprocess', updateTimeDisplay);
+  wavesurfer.on('interaction', updateTimeDisplay);
+  wavesurfer.on('finish', () => {
+    playBtn.textContent = '▶ Play';
+  });
+
+  function updateTimeDisplay() {
+    const cur = wavesurfer.getCurrentTime();
+    const total = wavesurfer.getDuration();
+    timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(total)}`;
+  }
+
+  function togglePlay() {
+    if (!wavesurfer) return;
+    wavesurfer.playPause();
+    playBtn.textContent = wavesurfer.isPlaying() ? '❚❚ Pause' : '▶ Play';
+  }
+
+  playBtn.onclick = togglePlay;
+
+  currentLatencies = data.latencies;
+  document.getElementById('prev-latency').onclick = () => jumpLatency(-1);
+  document.getElementById('next-latency').onclick = () => jumpLatency(1);
+
+  const zoomSlider = document.getElementById('zoom');
+  zoomSlider.oninput = () => wavesurfer.zoom(parseInt(zoomSlider.value, 10));
+
+  document.getElementById('clear-btn').onclick = () => clearCurrent(data.token);
+
+  renderStats(data);
+  renderSegmentLists(data);
+  result.classList.add('active');
+}
+
+async function clearCurrent(token) {
+  if (wavesurfer) {
+    try { wavesurfer.destroy(); } catch (e) {}
+    wavesurfer = null;
+  }
+  result.classList.remove('active');
+  errorMsg.innerHTML = '';
+  fileInput.value = '';
+
+  if (token) {
+    try {
+      await fetch(`cache/${token}`, { method: 'DELETE' });
+      console.log('[latency-ui] cleared cache for', token);
+    } catch (e) {
+      console.warn('[latency-ui] cache clear failed:', e);
+    }
+  }
+}
+
+function jumpLatency(dir) {
+  if (!currentLatencies.length) return;
+  const cur = wavesurfer.getCurrentTime();
+  let target = null;
+  if (dir > 0) {
+    target = currentLatencies.find(l => l.human_stop > cur + 0.1);
+  } else {
+    const rev = [...currentLatencies].reverse();
+    target = rev.find(l => l.human_stop < cur - 0.1);
+  }
+  if (target) {
+    wavesurfer.setTime(target.human_stop);
+  }
+}
+
+function renderStats(data) {
+  const s = data.statistics;
+  const info = data.file_info;
+  const rows = [
+    ['Duration', `${info.duration.toFixed(2)}s`],
+    ['Channels', info.is_stereo ? 'Stereo' : 'Mono'],
+    ['Sample rate', `${info.sample_rate} Hz`],
+    ['AI segments', s.num_ai_segments],
+    ['Human segments', s.num_human_segments],
+    ['Latencies', s.num_latencies],
+    ['Outliers', s.num_outliers || 0],
+  ];
+  if (s.avg_latency !== null) {
+    rows.push(['Avg latency', `${s.avg_latency.toFixed(3)}s`]);
+    if (s.trimmed_avg_latency !== null)
+      rows.push(['Trimmed avg', `${s.trimmed_avg_latency.toFixed(3)}s`]);
+    rows.push(['Median', `${s.median_latency.toFixed(3)}s`]);
+    rows.push(['Min', `${s.min_latency.toFixed(3)}s`]);
+    rows.push(['Max', `${s.max_latency.toFixed(3)}s`]);
+  }
+  if (data.mono_mode) {
+    rows.push(['Classification', data.classification_method || 'unknown']);
+  }
+  document.getElementById('stats').innerHTML = rows
+    .map(([k, v]) => `<div class="stat-row"><span class="stat-label">${k}</span><span class="stat-value">${v}</span></div>`)
+    .join('');
+}
+
+function renderSegmentLists(data) {
+  const fmt = (seg) => `${seg.start.toFixed(2)}s → ${seg.end.toFixed(2)}s (${seg.duration.toFixed(2)}s)`;
+
+  document.getElementById('ai-list').innerHTML = data.ai_segments
+    .map(s => `<div class="segment-item ai" data-start="${s.start}"><span>AI</span><span class="segment-time">${fmt(s)}</span></div>`)
+    .join('') || '<div style="color:#8892a0;font-size:13px;">None detected</div>';
+
+  document.getElementById('human-list').innerHTML = data.human_segments
+    .map(s => `<div class="segment-item human" data-start="${s.start}"><span>Human</span><span class="segment-time">${fmt(s)}</span></div>`)
+    .join('') || '<div style="color:#8892a0;font-size:13px;">None detected</div>';
+
+  document.getElementById('latencies-list').innerHTML = data.latencies
+    .map(l => {
+      const tag = l.outlier ? ' <span style="color:#ffb84a; font-size:11px;">outlier</span>' : '';
+      return `<div class="segment-item latency" data-start="${l.human_stop}"><span>${l.latency.toFixed(3)}s${tag}</span><span class="segment-time">${l.human_stop.toFixed(2)}s → ${l.ai_start.toFixed(2)}s</span></div>`;
+    })
+    .join('') || '<div style="color:#8892a0;font-size:13px;">None detected</div>';
+
+  // Click to seek
+  document.querySelectorAll('.segment-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const t = parseFloat(item.dataset.start);
+      wavesurfer.setTime(t);
+    });
+  });
+}
+</script>
+</body>
+</html>
