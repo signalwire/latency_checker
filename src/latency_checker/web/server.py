@@ -10,6 +10,10 @@ Environment variables:
                                 files (default: ~/.cache/latency_checker/audio_cache)
   LATENCY_UI_CACHE_MAX_AGE_HOURS Evict cache entries older than this on each
                                 upload (default: 24)
+  LATENCY_UI_PROXY_PREFIX       URL prefix when served behind a reverse proxy.
+                                Example: "/latency" when Apache has
+                                ProxyPass /latency/ http://.../
+                                Default: "" (served at the root)
 """
 
 import hashlib
@@ -22,7 +26,7 @@ import soundfile as sf
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from latency_checker.analyzer import AudioAnalyzer
@@ -39,6 +43,16 @@ _default_cache = Path.home() / ".cache" / "latency_checker" / "audio_cache"
 CACHE_DIR = Path(os.environ.get("LATENCY_UI_CACHE_DIR", str(_default_cache)))
 CACHE_MAX_AGE_HOURS = float(os.environ.get("LATENCY_UI_CACHE_MAX_AGE_HOURS", "24"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# URL prefix when served behind a reverse proxy. The server injects a
+# <base href="{prefix}/"> tag into index.html so all relative URLs in the
+# page (analyze, audio/TOKEN, check_cache, etc.) resolve under the prefix
+# without the JS having to guess from window.location.
+_raw_prefix = os.environ.get("LATENCY_UI_PROXY_PREFIX", "").strip()
+# Normalize: ensure leading slash, strip trailing slash, empty means root
+if _raw_prefix and not _raw_prefix.startswith("/"):
+    _raw_prefix = "/" + _raw_prefix
+PROXY_PREFIX = _raw_prefix.rstrip("/")
 
 
 def _evict_old_cache_entries():
@@ -91,7 +105,12 @@ def _build_response(token: str, result: dict, filename: str | None, cached: bool
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    html = (STATIC_DIR / "index.html").read_text()
+    if PROXY_PREFIX:
+        # Inject <base href="PREFIX/"> into the <head> so all relative URLs
+        # in the page resolve under the prefix (analyze, audio/TOKEN, etc.).
+        html = html.replace("<head>", f'<head>\n<base href="{PROXY_PREFIX}/">', 1)
+    return HTMLResponse(html)
 
 
 @app.get("/check_cache")
@@ -175,10 +194,13 @@ async def analyze(
             )
             result = analyzer.analyze()
 
-            # Transcode for playback if we don't already have it
+            # Transcode for playback if we don't already have it.
+            # 8kHz stereo PCM_16 is ~13MB for a 14-min call, small enough
+            # to transit a reverse proxy reliably but still good enough for
+            # speech visualization (human voice is mostly <4kHz).
             if not playback_path.exists():
                 loader = AudioLoader(str(tmp_path))
-                audio, sr = loader.load(target_sr=16000, mono=False)
+                audio, sr = loader.load(target_sr=8000, mono=False)
                 write_tmp = playback_path.with_suffix(".wav.tmp")
                 data_out = audio.T if audio.ndim == 2 else audio
                 sf.write(str(write_tmp), data_out, sr, subtype='PCM_16', format='WAV')

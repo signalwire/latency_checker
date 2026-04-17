@@ -114,6 +114,25 @@ Configure via environment variables:
 - `LATENCY_UI_LOG` (default `./latency-ui.log`)
 - `LATENCY_UI_PID` (default `./latency-ui.pid`)
 - `LATENCY_UI_BIN` (default `latency-ui` on PATH)
+- `LATENCY_UI_PROXY_PREFIX` — URL prefix when served behind a reverse proxy (e.g. `/latency`). Default: empty (served at root).
+- `LATENCY_UI_CACHE_DIR` — transcoded-audio cache directory
+- `LATENCY_UI_CACHE_MAX_AGE_HOURS` — cache eviction age (default 24)
+
+#### Behind a reverse proxy
+
+If you serve the UI through Apache/nginx at a sub-path, set `LATENCY_UI_PROXY_PREFIX` to the prefix you proxy on. The server will inject a `<base>` tag so all the app's relative URLs resolve correctly.
+
+**Apache example** — serve at `https://yourhost/latency/`:
+
+```apache
+RedirectMatch ^/latency$ /latency/
+ProxyPass         /latency/ http://127.0.0.1:9090/
+ProxyPassReverse  /latency/ http://127.0.0.1:9090/
+```
+
+```bash
+LATENCY_UI_PROXY_PREFIX=/latency LATENCY_UI_PORT=9090 ./latency-ui.sh start
+```
 
 ### Splitting Mono to Stereo
 

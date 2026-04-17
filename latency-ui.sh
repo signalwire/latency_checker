@@ -14,6 +14,10 @@
 #   LATENCY_UI_LOG       Log file path (default: ./latency-ui.log)
 #   LATENCY_UI_PID       PID file path (default: ./latency-ui.pid)
 #   LATENCY_UI_BIN       Path to latency-ui binary (default: latency-ui on PATH)
+#   LATENCY_UI_PROXY_PREFIX  URL prefix when served behind a reverse proxy
+#                            (e.g. "/latency"). Default: "" (served at root).
+#   LATENCY_UI_CACHE_DIR     Transcoded audio cache directory
+#   LATENCY_UI_CACHE_MAX_AGE_HOURS  Cache eviction age in hours (default 24)
 
 set -euo pipefail
 

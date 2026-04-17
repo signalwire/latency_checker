@@ -120,6 +120,15 @@ class FinalDetector:
                 lat.outlier = lat.latency > outlier_threshold
             num_outliers = sum(1 for l in latencies if l.outlier)
 
+        # Percentiles for tail analysis (needs >= 1 value)
+        percentiles = {}
+        if latency_values:
+            for p in (50, 75, 90, 95, 99):
+                percentiles[f'p{p}_latency'] = float(np.percentile(latency_values, p))
+        else:
+            for p in (50, 75, 90, 95, 99):
+                percentiles[f'p{p}_latency'] = None
+
         return {
             'num_ai_segments': len(ai_segments),
             'num_human_segments': len(human_segments),
@@ -130,6 +139,7 @@ class FinalDetector:
             'min_latency': float(np.min(latency_values)) if latency_values else None,
             'max_latency': float(np.max(latency_values)) if latency_values else None,
             'median_latency': float(np.median(latency_values)) if latency_values else None,
+            **percentiles,
         }
 
     def calculate_energy(self, chunk: np.ndarray) -> float:

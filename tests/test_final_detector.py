@@ -521,6 +521,8 @@ class TestResultStructure:
         result = _detector().detect_turns(ai, human)
         stats = result['statistics']
         for key in ['num_ai_segments', 'num_human_segments', 'num_latencies',
-                     'avg_latency', 'trimmed_avg_latency', 'min_latency',
-                     'max_latency', 'median_latency']:
+                     'num_outliers', 'avg_latency', 'trimmed_avg_latency',
+                     'min_latency', 'max_latency', 'median_latency',
+                     'p50_latency', 'p75_latency', 'p90_latency',
+                     'p95_latency', 'p99_latency']:
             assert key in stats

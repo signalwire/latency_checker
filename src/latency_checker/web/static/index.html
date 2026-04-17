@@ -217,11 +217,24 @@
         <div class="legend-item"><div class="legend-swatch human-color"></div>Human</div>
         <div class="legend-item"><div class="legend-swatch latency-color"></div>Latency marker</div>
       </div>
+      <div id="latency-chart-container" style="margin-top:16px; border-top:1px solid #1e2433; padding-top:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-size:11px; color:#8892a0; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Latency Timeline</span>
+          <span style="font-size:11px; color:#8892a0;" id="chart-hover">click a bar to jump to that turn</span>
+        </div>
+        <svg id="latency-chart" width="100%" height="120" style="display:block;"></svg>
+      </div>
     </div>
 
     <div class="stats-grid">
       <div class="panel">
-        <h3>Statistics</h3>
+        <h3 style="display:flex; align-items:center; justify-content:space-between;">
+          <span>Statistics</span>
+          <span style="display:flex; gap:6px;">
+            <button id="dl-json" class="secondary" style="padding:3px 8px; font-size:11px;">JSON</button>
+            <button id="dl-csv" class="secondary" style="padding:3px 8px; font-size:11px;">CSV</button>
+          </span>
+        </h3>
         <div id="stats"></div>
       </div>
       <div class="panel">
@@ -265,6 +278,12 @@ dropzone.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', (e) => {
   if (e.target.files[0]) uploadFile(e.target.files[0]);
+});
+
+// Re-render the latency chart on window resize so bars rescale
+let lastRenderedData = null;
+window.addEventListener('resize', () => {
+  if (lastRenderedData) renderLatencyChart(lastRenderedData);
 });
 
 // Spacebar toggles play/pause, except when typing in an input field
@@ -366,28 +385,33 @@ function render(data) {
 
   wavesurfer = WaveSurfer.create(opts);
 
-
-  // Resolve against current page URL so it works under any path prefix
-  // (e.g. when served via a reverse proxy at /latency/)
-  const audioUrl = new URL(data.audio_url, window.location.href).href;
-  console.log('[latency-ui] loading audio from:', audioUrl);
-
-  // Fetch as blob ourselves so failures surface with real HTTP status
-  fetch(audioUrl)
-    .then(r => {
-      console.log('[latency-ui] audio fetch status:', r.status, r.headers.get('content-type'));
-      if (!r.ok) throw new Error(`audio fetch ${r.status}: ${r.statusText}`);
-      return r.blob();
-    })
-    .then(blob => {
-      console.log('[latency-ui] audio blob size:', blob.size, 'type:', blob.type);
-      const blobUrl = URL.createObjectURL(blob);
-      wavesurfer.load(blobUrl);
-    })
-    .catch(e => {
-      console.error('[latency-ui] audio load failed:', e);
-      errorMsg.innerHTML = `<div class="error">Audio load failed: ${e.message}</div>`;
-    });
+  // Load via XHR with arraybuffer. fetch() + .blob() was reliably failing
+  // mid-body on large files through our reverse proxy (ERR_FAILED) even
+  // though curl succeeded — XHR handles this case more robustly.
+  console.log('[latency-ui] loading audio from:', data.audio_url);
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', data.audio_url, true);
+  xhr.responseType = 'arraybuffer';
+  xhr.onload = () => {
+    console.log('[latency-ui] audio xhr status:', xhr.status, xhr.response ? xhr.response.byteLength + ' bytes' : 'no body');
+    if (xhr.status < 200 || xhr.status >= 300) {
+      errorMsg.innerHTML = `<div class="error">Audio load failed: HTTP ${xhr.status}</div>`;
+      return;
+    }
+    const blob = new Blob([xhr.response], { type: 'audio/wav' });
+    wavesurfer.load(URL.createObjectURL(blob));
+  };
+  xhr.onerror = () => {
+    console.error('[latency-ui] audio xhr error');
+    errorMsg.innerHTML = `<div class="error">Audio load failed: network error</div>`;
+  };
+  xhr.onprogress = (e) => {
+    if (e.lengthComputable) {
+      const pct = (e.loaded / e.total * 100).toFixed(0);
+      console.log(`[latency-ui] audio progress: ${pct}% (${e.loaded}/${e.total})`);
+    }
+  };
+  xhr.send();
 
   wavesurfer.on('ready', () => {
     // AI segments (blue regions)
@@ -454,10 +478,61 @@ function render(data) {
   zoomSlider.oninput = () => wavesurfer.zoom(parseInt(zoomSlider.value, 10));
 
   document.getElementById('clear-btn').onclick = () => clearCurrent(data.token);
+  document.getElementById('dl-json').onclick = () => downloadJson(data);
+  document.getElementById('dl-csv').onclick = () => downloadCsv(data);
 
+  lastRenderedData = data;
+  renderLatencyChart(data);
   renderStats(data);
   renderSegmentLists(data);
   result.classList.add('active');
+}
+
+function triggerDownload(content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function baseFilename(data) {
+  const raw = data.filename || 'analysis';
+  return raw.replace(/\.[^./]+$/, '') || 'analysis';
+}
+
+function downloadJson(data) {
+  const payload = {
+    filename: data.filename,
+    file_info: data.file_info,
+    channel_assignment: data.channel_assignment,
+    statistics: data.statistics,
+    ai_segments: data.ai_segments,
+    human_segments: data.human_segments,
+    latencies: data.latencies,
+    mono_mode: data.mono_mode,
+    classification_method: data.classification_method,
+  };
+  triggerDownload(JSON.stringify(payload, null, 2), `${baseFilename(data)}.json`, 'application/json');
+}
+
+function downloadCsv(data) {
+  const rows = [['index', 'human_stop_s', 'ai_start_s', 'latency_s', 'outlier']];
+  data.latencies.forEach((l, i) => {
+    rows.push([
+      i + 1,
+      l.human_stop.toFixed(3),
+      l.ai_start.toFixed(3),
+      l.latency.toFixed(3),
+      l.outlier ? 'true' : 'false',
+    ]);
+  });
+  const csv = rows.map(r => r.join(',')).join('\n') + '\n';
+  triggerDownload(csv, `${baseFilename(data)}_latencies.csv`, 'text/csv');
 }
 
 async function clearCurrent(token) {
@@ -494,6 +569,91 @@ function jumpLatency(dir) {
   }
 }
 
+function renderLatencyChart(data) {
+  const svg = document.getElementById('latency-chart');
+  const hover = document.getElementById('chart-hover');
+  const container = document.getElementById('latency-chart-container');
+  svg.innerHTML = '';
+
+  if (!data.latencies || data.latencies.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = '';
+
+  const width = svg.clientWidth || 800;
+  const height = 120;
+  const padL = 40, padR = 10, padT = 10, padB = 22;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+
+  const duration = data.file_info.duration;
+  const maxLat = Math.max(...data.latencies.map(l => l.latency), 0.1);
+  // Round up to a nice number for the y-axis
+  const niceMax = Math.ceil(maxLat * 10) / 10;
+
+  // Baseline
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+  // Y-axis gridlines at 25%, 50%, 75%, 100%
+  for (let i = 1; i <= 4; i++) {
+    const y = padT + plotH * (1 - i / 4);
+    const val = (niceMax * i / 4).toFixed(2);
+    svg.insertAdjacentHTML('beforeend',
+      `<line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="#1e2433" stroke-width="1"/>
+       <text x="${padL - 6}" y="${y + 3}" fill="#8892a0" font-size="10" text-anchor="end">${val}s</text>`
+    );
+  }
+
+  // X-axis baseline
+  svg.insertAdjacentHTML('beforeend',
+    `<line x1="${padL}" y1="${padT + plotH}" x2="${width - padR}" y2="${padT + plotH}" stroke="#2a3040" stroke-width="1"/>`
+  );
+
+  // X-axis ticks: 4 labels evenly distributed
+  for (let i = 0; i <= 4; i++) {
+    const t = (duration * i / 4);
+    const x = padL + plotW * (i / 4);
+    const m = Math.floor(t / 60);
+    const s = Math.floor(t % 60).toString().padStart(2, '0');
+    svg.insertAdjacentHTML('beforeend',
+      `<text x="${x}" y="${height - 6}" fill="#8892a0" font-size="10" text-anchor="middle">${m}:${s}</text>`
+    );
+  }
+
+  // Bars
+  const barWidth = Math.max(2, Math.min(12, plotW / data.latencies.length - 2));
+  data.latencies.forEach((lat, i) => {
+    const x = padL + plotW * (lat.ai_start / duration) - barWidth / 2;
+    const h = plotH * (lat.latency / niceMax);
+    const y = padT + plotH - h;
+    const color = lat.outlier ? '#ffb84a' : '#ff5571';
+    svg.insertAdjacentHTML('beforeend',
+      `<rect class="lat-bar" data-idx="${i}" data-seek="${lat.human_stop}"
+             x="${x}" y="${y}" width="${barWidth}" height="${h}"
+             fill="${color}" opacity="0.85" style="cursor:pointer"/>`
+    );
+  });
+
+  // Click / hover handlers on the bars
+  svg.querySelectorAll('.lat-bar').forEach(bar => {
+    bar.addEventListener('mouseenter', () => {
+      const idx = parseInt(bar.dataset.idx, 10);
+      const lat = data.latencies[idx];
+      hover.textContent = `turn ${idx + 1}: ${lat.latency.toFixed(3)}s @ ${lat.ai_start.toFixed(2)}s${lat.outlier ? ' (outlier)' : ''}`;
+      bar.setAttribute('opacity', '1');
+    });
+    bar.addEventListener('mouseleave', () => {
+      hover.textContent = 'click a bar to jump to that turn';
+      bar.setAttribute('opacity', '0.85');
+    });
+    bar.addEventListener('click', () => {
+      const t = parseFloat(bar.dataset.seek);
+      if (wavesurfer) wavesurfer.setTime(t);
+    });
+  });
+}
+
 function renderStats(data) {
   const s = data.statistics;
   const info = data.file_info;
@@ -510,7 +670,11 @@ function renderStats(data) {
     rows.push(['Avg latency', `${s.avg_latency.toFixed(3)}s`]);
     if (s.trimmed_avg_latency !== null)
       rows.push(['Trimmed avg', `${s.trimmed_avg_latency.toFixed(3)}s`]);
-    rows.push(['Median', `${s.median_latency.toFixed(3)}s`]);
+    rows.push(['Median (p50)', `${s.median_latency.toFixed(3)}s`]);
+    if (s.p75_latency != null) rows.push(['p75', `${s.p75_latency.toFixed(3)}s`]);
+    if (s.p90_latency != null) rows.push(['p90', `${s.p90_latency.toFixed(3)}s`]);
+    if (s.p95_latency != null) rows.push(['p95', `${s.p95_latency.toFixed(3)}s`]);
+    if (s.p99_latency != null) rows.push(['p99', `${s.p99_latency.toFixed(3)}s`]);
     rows.push(['Min', `${s.min_latency.toFixed(3)}s`]);
     rows.push(['Max', `${s.max_latency.toFixed(3)}s`]);
   }
