@@ -190,6 +190,7 @@
     border-radius: var(--radius-lg);
     padding: 16px;
   }
+  .panel-full { grid-column: 1 / -1; }
   .panel h3 {
     margin: 0 0 12px;
     font-family: var(--font-code);
@@ -199,6 +200,24 @@
     text-transform: uppercase;
     letter-spacing: 0.14em;
   }
+  .panel h3.panel-collapse {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 0;
+    transition: color 0.15s ease;
+  }
+  .panel h3.panel-collapse:hover { color: var(--fg-default); }
+  .panel h3.panel-collapse .chevron {
+    font-size: 12px;
+    transition: transform 0.15s ease;
+    opacity: 0.7;
+  }
+  .panel h3.panel-collapse.open { margin-bottom: 12px; }
+  .panel h3.panel-collapse.open .chevron { transform: rotate(180deg); }
+  .panel-body-collapsed { display: none; }
   .stat-row {
     display: flex;
     justify-content: space-between;
@@ -206,9 +225,26 @@
     font-size: 14px;
     border-bottom: 1px solid var(--border-default);
   }
-  .stat-row:last-child { border-bottom: 0; }
+  .stats-group .stat-row:last-child { border-bottom: 0; }
   .stat-label { color: var(--fg-muted); }
   .stat-value { font-family: var(--font-code); color: var(--fg-default); }
+  .stat-row-key .stat-label { color: var(--fg-default); }
+  .stat-value-key { color: var(--sw-turquoise); font-weight: 600; }
+  .stats-toggle {
+    background: transparent;
+    color: var(--fg-muted);
+    border: 0;
+    padding: 10px 0 0;
+    margin: 0;
+    font-family: var(--font-code);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    cursor: pointer;
+    width: 100%;
+    text-align: left;
+  }
+  .stats-toggle:hover { color: var(--sw-fuchsia); background: transparent; }
 
   .segments-list { max-height: 280px; overflow-y: auto; }
   .segment-item {
@@ -321,7 +357,7 @@
     </div>
 
     <div class="stats-grid">
-      <div class="panel">
+      <div class="panel panel-full">
         <h3 style="display:flex; align-items:center; justify-content:space-between;">
           <span>Statistics</span>
           <span style="display:flex; gap:6px;">
@@ -332,20 +368,20 @@
         <div id="stats"></div>
       </div>
       <div class="panel">
-        <h3>Human → AI Latencies</h3>
-        <div class="segments-list" id="latencies-list"></div>
+        <h3 class="panel-collapse"><span>Human → AI Latencies</span><span class="chevron">▾</span></h3>
+        <div class="segments-list panel-body-collapsed" id="latencies-list"></div>
       </div>
       <div class="panel">
-        <h3>AI → Human Response Times</h3>
-        <div class="segments-list" id="human-resp-list"></div>
+        <h3 class="panel-collapse"><span>AI → Human Response Times</span><span class="chevron">▾</span></h3>
+        <div class="segments-list panel-body-collapsed" id="human-resp-list"></div>
       </div>
       <div class="panel">
-        <h3>AI Segments</h3>
-        <div class="segments-list" id="ai-list"></div>
+        <h3 class="panel-collapse"><span>AI Segments</span><span class="chevron">▾</span></h3>
+        <div class="segments-list panel-body-collapsed" id="ai-list"></div>
       </div>
       <div class="panel">
-        <h3>Human Segments</h3>
-        <div class="segments-list" id="human-list"></div>
+        <h3 class="panel-collapse"><span>Human Segments</span><span class="chevron">▾</span></h3>
+        <div class="segments-list panel-body-collapsed" id="human-list"></div>
       </div>
     </div>
   </div>
@@ -382,6 +418,16 @@ fileInput.addEventListener('change', (e) => {
 let lastRenderedData = null;
 window.addEventListener('resize', () => {
   if (lastRenderedData) renderLatencyChart(lastRenderedData);
+});
+
+// List panels are collapsed by default — click the header to toggle.
+// Headers are static HTML so we can attach listeners once at page load.
+document.querySelectorAll('.panel-collapse').forEach(header => {
+  header.addEventListener('click', () => {
+    const body = header.nextElementSibling;
+    const open = header.classList.toggle('open');
+    body.classList.toggle('panel-body-collapsed', !open);
+  });
 });
 
 // Spacebar toggles play/pause, except when typing in an input field
@@ -838,45 +884,82 @@ function renderLatencyChart(data) {
   });
 }
 
+// Track open/closed across re-renders so re-uploading the same file
+// doesn't snap the details back to collapsed.
+let statsDetailsOpen = false;
+
 function renderStats(data) {
   const s = data.statistics;
   const info = data.file_info;
-  const rows = [
-    ['Duration', `${info.duration.toFixed(2)}s`],
-    ['Channels', info.is_stereo ? 'Stereo' : 'Mono'],
-    ['Sample rate', `${info.sample_rate} Hz`],
-    ['AI segments', s.num_ai_segments],
-    ['Human segments', s.num_human_segments],
-    ['Latencies', s.num_latencies],
-    ['Outliers', s.num_outliers || 0],
-  ];
-  if (s.avg_latency !== null) {
-    rows.push(['Avg latency', `${s.avg_latency.toFixed(3)}s`]);
-    if (s.trimmed_avg_latency !== null)
-      rows.push(['Trimmed avg', `${s.trimmed_avg_latency.toFixed(3)}s`]);
-    rows.push(['Median (p50)', `${s.median_latency.toFixed(3)}s`]);
-    if (s.p75_latency != null) rows.push(['p75', `${s.p75_latency.toFixed(3)}s`]);
-    if (s.p90_latency != null) rows.push(['p90', `${s.p90_latency.toFixed(3)}s`]);
-    if (s.p95_latency != null) rows.push(['p95', `${s.p95_latency.toFixed(3)}s`]);
-    if (s.p99_latency != null) rows.push(['p99', `${s.p99_latency.toFixed(3)}s`]);
-    rows.push(['Min', `${s.min_latency.toFixed(3)}s`]);
-    rows.push(['Max', `${s.max_latency.toFixed(3)}s`]);
-  }
   const hr = data.human_response_statistics;
+
+  // Rows: [label, value, highlight?]. highlight=true marks the key
+  // stat — rendered in fuchsia so the eye finds it immediately.
+  const keyRows = [];
+  const detailRows = [];
+
+  if (s.avg_latency !== null) {
+    keyRows.push(['Avg latency', `${s.avg_latency.toFixed(3)}s`, true]);
+    keyRows.push(['Median (p50)', `${s.median_latency.toFixed(3)}s`]);
+    if (s.p95_latency != null) keyRows.push(['p95', `${s.p95_latency.toFixed(3)}s`]);
+    const outlierSuffix = s.num_outliers
+      ? ` (${s.num_outliers} outlier${s.num_outliers === 1 ? '' : 's'})`
+      : '';
+    keyRows.push(['Latencies', `${s.num_latencies}${outlierSuffix}`]);
+  } else {
+    keyRows.push(['Latencies', 'None detected']);
+  }
   if (hr && hr.count) {
-    rows.push(['', '']);  // spacer
-    rows.push(['AI→Human count', hr.count]);
-    rows.push(['AI→Human avg', `${hr.avg.toFixed(3)}s`]);
-    rows.push(['AI→Human median', `${hr.median.toFixed(3)}s`]);
-    if (hr.p90 != null) rows.push(['AI→Human p90', `${hr.p90.toFixed(3)}s`]);
-    rows.push(['AI→Human min/max', `${hr.min.toFixed(3)}s / ${hr.max.toFixed(3)}s`]);
+    keyRows.push(['AI→Human avg', `${hr.avg.toFixed(3)}s`]);
+  }
+
+  detailRows.push(['Duration', `${info.duration.toFixed(2)}s`]);
+  detailRows.push(['Channels', info.is_stereo ? 'Stereo' : 'Mono']);
+  detailRows.push(['Sample rate', `${info.sample_rate} Hz`]);
+  detailRows.push(['AI segments', s.num_ai_segments]);
+  detailRows.push(['Human segments', s.num_human_segments]);
+  if (s.avg_latency !== null) {
+    if (s.trimmed_avg_latency !== null)
+      detailRows.push(['Trimmed avg', `${s.trimmed_avg_latency.toFixed(3)}s`]);
+    if (s.p75_latency != null) detailRows.push(['p75', `${s.p75_latency.toFixed(3)}s`]);
+    if (s.p90_latency != null) detailRows.push(['p90', `${s.p90_latency.toFixed(3)}s`]);
+    if (s.p99_latency != null) detailRows.push(['p99', `${s.p99_latency.toFixed(3)}s`]);
+    detailRows.push(['Min', `${s.min_latency.toFixed(3)}s`]);
+    detailRows.push(['Max', `${s.max_latency.toFixed(3)}s`]);
+  }
+  if (hr && hr.count) {
+    detailRows.push(['AI→Human count', hr.count]);
+    detailRows.push(['AI→Human median', `${hr.median.toFixed(3)}s`]);
+    if (hr.p90 != null) detailRows.push(['AI→Human p90', `${hr.p90.toFixed(3)}s`]);
+    detailRows.push(['AI→Human min/max', `${hr.min.toFixed(3)}s / ${hr.max.toFixed(3)}s`]);
   }
   if (data.mono_mode) {
-    rows.push(['Classification', data.classification_method || 'unknown']);
+    detailRows.push(['Classification', data.classification_method || 'unknown']);
   }
-  document.getElementById('stats').innerHTML = rows
-    .map(([k, v]) => `<div class="stat-row"><span class="stat-label">${k}</span><span class="stat-value">${v}</span></div>`)
-    .join('');
+
+  const renderRow = ([k, v, hi]) => {
+    const cls = hi ? 'stat-row stat-row-key' : 'stat-row';
+    const valCls = hi ? 'stat-value stat-value-key' : 'stat-value';
+    return `<div class="${cls}"><span class="stat-label">${k}</span><span class="${valCls}">${v}</span></div>`;
+  };
+
+  const keyHtml = keyRows.map(renderRow).join('');
+  const detailHtml = detailRows.map(renderRow).join('');
+  const displayStyle = statsDetailsOpen ? '' : 'display:none;';
+  const toggleLabel = statsDetailsOpen ? 'Hide details ▴' : 'Show details ▾';
+
+  document.getElementById('stats').innerHTML =
+    `<div class="stats-group">${keyHtml}</div>` +
+    `<div class="stats-group" id="stats-details" style="${displayStyle}">${detailHtml}</div>` +
+    `<button type="button" id="stats-toggle" class="stats-toggle">${toggleLabel}</button>`;
+
+  const toggle = document.getElementById('stats-toggle');
+  const details = document.getElementById('stats-details');
+  toggle.addEventListener('click', () => {
+    statsDetailsOpen = !statsDetailsOpen;
+    details.style.display = statsDetailsOpen ? '' : 'none';
+    toggle.textContent = statsDetailsOpen ? 'Hide details ▴' : 'Show details ▾';
+  });
 }
 
 function renderSegmentLists(data) {
