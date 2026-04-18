@@ -216,7 +216,8 @@
       <div class="legend">
         <div class="legend-item"><div class="legend-swatch ai-color"></div>AI</div>
         <div class="legend-item"><div class="legend-swatch human-color"></div>Human</div>
-        <div class="legend-item"><div class="legend-swatch latency-color"></div>Latency marker</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:rgba(255,85,113,0.6);"></div>H→AI latency</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:rgba(79,182,224,0.6);"></div>AI→H latency</div>
       </div>
       <div id="latency-chart-container" style="margin-top:16px; border-top:1px solid #1e2433; padding-top:12px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -227,7 +228,7 @@
           </span>
           <span style="font-size:11px; color:#8892a0;" id="chart-hover">click a bar to jump to that turn</span>
         </div>
-        <svg id="latency-chart" width="100%" height="120" style="display:block;"></svg>
+        <svg id="latency-chart" width="100%" height="140" style="display:block;"></svg>
       </div>
     </div>
 
@@ -445,7 +446,7 @@ function render(data) {
         content: 'H',
       });
     });
-    // Latency markers (thin red regions)
+    // Latency markers — Human → AI (red)
     data.latencies.forEach(lat => {
       regions.addRegion({
         start: lat.human_stop,
@@ -453,7 +454,18 @@ function render(data) {
         color: 'rgba(255, 85, 113, 0.45)',
         drag: false,
         resize: false,
-        content: `${lat.latency.toFixed(2)}s`,
+        content: `H→AI ${lat.latency.toFixed(2)}s`,
+      });
+    });
+    // Latency markers — AI → Human (teal/blue)
+    (data.human_response_latencies || []).forEach(lat => {
+      regions.addRegion({
+        start: lat.ai_stop,
+        end: lat.human_start,
+        color: 'rgba(79, 182, 224, 0.45)',
+        drag: false,
+        resize: false,
+        content: `AI→H ${lat.latency.toFixed(2)}s`,
       });
     });
     updateTimeDisplay();
@@ -631,15 +643,19 @@ function renderLatencyChart(data) {
   container.style.display = '';
 
   const width = svg.clientWidth || 800;
-  const height = 120;
-  const padL = 40, padR = 10, padT = 10, padB = 22;
+  const height = 140;  // extra room for clipped-bar labels above the chart
+  svg.setAttribute('height', height);
+  const padL = 40, padR = 10, padT = 22, padB = 22;  // larger padT for labels
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
 
   const duration = data.file_info.duration;
   const humanResp = data.human_response_latencies || [];
-  const allLats = [...data.latencies.map(l => l.latency), ...humanResp.map(l => l.latency), 0.1];
-  const maxLat = Math.max(...allLats);
+  // Y-axis is scaled to H→AI latencies only (the primary metric).
+  // AI→H outliers that exceed this get drawn clipped with a label at the
+  // top indicating the actual value, so the primary series stays readable.
+  const haLats = data.latencies.map(l => l.latency);
+  const maxLat = Math.max(...haLats, 0.1);
   const niceMax = Math.ceil(maxLat * 10) / 10;
 
   // Baseline
@@ -689,7 +705,8 @@ function renderLatencyChart(data) {
 
   humanResp.forEach((lat, i) => {
     const x = padL + plotW * (lat.human_start / duration) - barWidth / 2;
-    const h = plotH * (lat.latency / niceMax);
+    const clipped = lat.latency > niceMax;
+    const h = clipped ? plotH : plotH * (lat.latency / niceMax);
     const y = padT + plotH - h;
     const color = lat.outlier ? '#9bd4ff' : '#4fb6e0';
     svg.insertAdjacentHTML('beforeend',
@@ -697,6 +714,17 @@ function renderLatencyChart(data) {
              x="${x}" y="${y}" width="${barWidth}" height="${h}"
              fill="${color}" opacity="0.85" style="cursor:pointer"/>`
     );
+    // Clipped AI→H bars: draw an up-arrow and numeric label above the chart
+    if (clipped) {
+      const cx = x + barWidth / 2;
+      const arrowY = padT - 2;
+      svg.insertAdjacentHTML('beforeend',
+        `<path d="M ${cx - 3} ${arrowY + 3} L ${cx} ${arrowY - 3} L ${cx + 3} ${arrowY + 3} Z"
+               fill="${color}" pointer-events="none"/>
+         <text x="${cx}" y="${arrowY - 5}" fill="${color}" font-size="9"
+               text-anchor="middle" pointer-events="none">${lat.latency.toFixed(1)}s</text>`
+      );
+    }
   });
 
   // Click / hover handlers on the bars
