@@ -1,126 +1,151 @@
 # Audio Latency Analyzer
 
-A Python package for analyzing AI/Human conversations and measuring response latencies in stereo audio files. Designed specifically for analyzing AI assistant interactions and measuring response times.
+Measure response latencies in recorded AI/Human conversations. Ships with a CLI for batch analysis and an optional browser UI for interactive inspection.
 
 ## Features
 
-- **AI/Human Speaker Detection**: Automatic detection of AI and human speakers in stereo audio
-- **Response Latency Measurement**: Precisely measure time from human query to AI response
-- **Turn Detection**: Identify conversation turns with debounced detection
-- **Mono & Stereo Support**: Handles both mono and stereo recordings
-- **Multi-format Support**: Analyze WAV, MP3, MP4, M4A, FLAC, OGG, and AAC files
-- **Comprehensive Statistics**: Response time statistics including average, min, max, median, and percentiles
+- **AI/Human speaker detection** — stereo (LEFT=Human, RIGHT=AI) or mono with automatic speaker classification
+- **Bidirectional latency** — Human→AI (the primary metric) and AI→Human response times
+- **Turn detection** — debounced energy state machine over 10ms chunks with crosstalk suppression, overlap/barge handling, and tail-noise trimming
+- **Multi-format input** — WAV, MP3, MP4, M4A, FLAC, OGG, AAC
+- **Rich statistics** — avg, trimmed avg, median, p50/p75/p90/p95/p99, min/max, outlier count
+- **Interactive browser UI** — annotated waveform, latency timeline chart, JSON/CSV export, SHA-1-keyed upload cache
 
 ## Channel Assignment
 
-### Stereo Audio
-For stereo audio files:
-- **LEFT channel = Human**
-- **RIGHT channel = AI**
+**Stereo** — LEFT = Human, RIGHT = AI.
 
-### Mono Audio
-For mono audio files, speakers are classified automatically:
-- **With `[diarize]` installed**: Uses speaker embeddings (resemblyzer) to cluster segments by voice similarity, then labels the louder cluster as AI. Highly accurate.
-- **Without `[diarize]`**: Uses energy-based heuristics (AI/TTS has flatter energy than human speech). Falls back to alternation if features can't discriminate.
+**Mono** — speakers are classified automatically:
+- With `[diarize]` installed, resemblyzer speaker embeddings cluster segments by voice similarity; the louder cluster is labeled AI. Most accurate.
+- Without `[diarize]`, energy-based heuristics are used (AI/TTS tends to have flatter energy than human speech). Falls back to speaker alternation when features can't discriminate.
 
 ## Installation
 
-### From source
 ```bash
-git clone <repository>
+git clone <repo>
 cd latency_checker
-pip install .
+pip install -e .                    # base install
+pip install -e ".[diarize]"         # + ML diarization for mono files
+pip install -e ".[web]"             # + FastAPI/uvicorn browser UI
+pip install -e ".[diarize,web]"     # everything
+pip install -e ".[dev]"             # test + lint toolchain
 ```
 
-### For development
-```bash
-pip install -e .
-```
+## CLI
 
-### With speaker diarization (recommended for mono files)
-```bash
-pip install .[diarize]
-```
+Three commands are installed:
 
-This installs `resemblyzer` for ML-based speaker identification. Without it, mono files
-use energy-based heuristics which are less accurate. Stereo files are unaffected.
+| Command | Purpose | Extras required |
+|---|---|---|
+| `audio-analyze` | Run analysis, print or save results | — |
+| `audio-split`   | Split a mono recording into stereo by speaker | `[diarize]` |
+| `latency-ui`    | Launch the browser UI | `[web]` |
 
-### With web UI
-```bash
-pip install .[web]
-```
-
-Installs FastAPI + uvicorn for the interactive browser UI.
-
-## Usage
-
-### Command Line Interface
-
-After installation, the `audio-analyze` command will be available:
+### `audio-analyze`
 
 ```bash
-# Basic analysis
+# Text summary to stdout
 audio-analyze conversation.wav
 
-# With custom parameters
-audio-analyze recording.mp3 --threshold 100 --ai-min-speaking 10
+# Tune detection — higher threshold = less sensitive, shorter min-silence = more segments
+audio-analyze recording.mp3 --threshold 100 --min-silence 1500
 
-# Save results to file
+# Save JSON (full data)
 audio-analyze call.wav --output results.json --format json
 
-# Text output (default)
-audio-analyze conversation.wav --output analysis.txt --format txt
+# Save Markdown summary
+audio-analyze call.wav --output results.md --format md
+
+# Save both JSON and text next to each other
+audio-analyze call.wav --output results --format both
+
+# Write to file without echoing to stdout
+audio-analyze call.wav -o results.json --format json --quiet
 ```
 
-#### CLI Options
+**Options:**
 
-- `--threshold, -t`: Energy threshold for speech detection (default: 50)
-- `--ai-min-speaking`: Minimum milliseconds for AI to start speaking (default: 20)
-- `--human-min-speaking`: Minimum milliseconds for human to start speaking (default: 20)
-- `--min-silence, -x`: Minimum milliseconds to stop speaking (default: 2000)
-- `--output, -o`: Output file path for results
-- `--format`: Output format: json or txt (default: txt)
-- `--sample-rate, -r`: Target sample rate for resampling
-- `--quiet, -q`: Suppress console output
+| Flag | Default | Description |
+|---|---|---|
+| `--threshold, -t` | `50` | Energy threshold for speech detection (mean-squared × 1e6 scale) |
+| `--ai-min-speaking` | `20` | ms of sustained AI energy before speech onset |
+| `--human-min-speaking` | `20` | ms of sustained Human energy before speech onset |
+| `--min-silence, -x` | `2000` | ms of silence to mark speech end (turn boundary) |
+| `--crosstalk-ratio, -c` | `3.0` | Suppress weaker channel when stronger is Nx louder; `0` disables |
+| `--sample-rate, -r` | source | Resample to this rate (Hz) before analysis |
+| `--output, -o` | — | Write results to this path |
+| `--format` | `txt` | One of `txt`, `json`, `md`, or `both` |
+| `--quiet, -q` | off | Suppress stdout (write file only) |
 
-### Web UI
+### `audio-split`
 
-With `[web]` installed, run `latency-ui` to launch an interactive browser UI:
+Splits a mono recording into a stereo file by speaker, so you can then run `audio-analyze` on the clean stereo result for higher accuracy.
 
 ```bash
-latency-ui                  # bind to 127.0.0.1:8000
-latency-ui --host 0.0.0.0 --port 8080
+audio-split recording_mono.wav                          # → recording_mono_stereo.wav
+audio-split recording_mono.wav -o recording_stereo.wav
+audio-analyze recording_stereo.wav
 ```
 
-Drag and drop an audio file to see an annotated waveform with colored AI/Human segments,
-latency markers, clickable segment list, and synchronized audio playback.
+Options: `--output/-o`, `--threshold/-t`, `--min-silence/-x`, `--crossfade` (ms fade at segment edges, default 10), `--sample-rate/-r`.
 
-#### Managing the UI as a background service
+## Web UI
 
-A helper script (`./latency-ui.sh`) runs the server in the background with a PID file and log:
+`latency-ui` launches a FastAPI server that serves a single-page browser UI built on wavesurfer.js.
 
 ```bash
-./latency-ui.sh start     # start in background
-./latency-ui.sh status    # check if running
-./latency-ui.sh logs      # tail -f the log
-./latency-ui.sh stop      # stop
+latency-ui                                 # 127.0.0.1:8000
+latency-ui --host 0.0.0.0 --port 8080      # expose on LAN
+latency-ui --reload                        # dev: auto-reload on code changes
+```
+
+Open the printed URL in a browser and drop an audio file on the page.
+
+### What the UI provides
+
+- **Waveform** — stereo rendered with split-channel colors (Human=blue, AI=fuchsia). Click any segment, latency marker, or timeline bar to seek.
+- **Latency timeline** — SVG bar chart showing every latency in chronological order. H→AI bars are fuchsia, AI→H are turquoise, outliers are gold. Y-axis is scaled to the H→AI range; AI→H outliers that exceed it are drawn clipped with a labeled arrow showing the real value.
+- **Key statistics** — Avg latency (highlighted), Median, p95, latency count with outlier count, AI→Human avg. A "Show details ▾" toggle expands file info, the full percentile breakdown, and the AI→Human stats.
+- **Collapsible lists** — H→AI latencies, AI→H response times, AI segments, and Human segments. Click any header to expand; click a row to seek.
+- **Export** — JSON and CSV download buttons in the Statistics panel.
+- **Playback controls** — Play/Pause (or **spacebar**), prev/next latency, zoom slider, and a millisecond-precision hover time readout.
+- **Parameters** — Threshold and min-silence inputs above the waveform are used on the next upload.
+- **Clear** — removes the current cached entry and resets the page.
+
+### Caching
+
+Uploads are keyed by SHA-1 of the file bytes. Before each upload the browser hashes the file locally and asks `/check_cache` — if the server has both the transcoded playback audio and an analysis JSON for the current params, the upload is skipped and the UI loads instantly.
+
+Default cache location: `~/.cache/latency_checker/audio_cache/`. Cache entries hold a 16kHz stereo PCM WAV transcode (for playback) plus the analysis JSON keyed by the analysis params. Entries older than 24h are evicted on each upload.
+
+### Running as a background service
+
+`./latency-ui.sh` is a POSIX helper that runs the server with a PID file and log:
+
+```bash
+./latency-ui.sh start       # start in background
+./latency-ui.sh status      # check if running
+./latency-ui.sh logs        # tail -f the log
 ./latency-ui.sh restart
+./latency-ui.sh stop
 ```
 
-Configure via environment variables:
+Environment variables (all optional):
 
-- `LATENCY_UI_HOST` (default `127.0.0.1`)
-- `LATENCY_UI_PORT` (default `8000`)
-- `LATENCY_UI_LOG` (default `./latency-ui.log`)
-- `LATENCY_UI_PID` (default `./latency-ui.pid`)
-- `LATENCY_UI_BIN` (default `latency-ui` on PATH)
-- `LATENCY_UI_PROXY_PREFIX` — URL prefix when served behind a reverse proxy (e.g. `/latency`). Default: empty (served at root).
-- `LATENCY_UI_CACHE_DIR` — transcoded-audio cache directory
-- `LATENCY_UI_CACHE_MAX_AGE_HOURS` — cache eviction age (default 24)
+| Variable | Default | Purpose |
+|---|---|---|
+| `LATENCY_UI_HOST` | `127.0.0.1` | Bind host |
+| `LATENCY_UI_PORT` | `8000` | Bind port |
+| `LATENCY_UI_LOG` | `./latency-ui.log` | Log file |
+| `LATENCY_UI_PID` | `./latency-ui.pid` | PID file |
+| `LATENCY_UI_BIN` | `latency-ui` | Path to the CLI binary |
+| `LATENCY_UI_PROXY_PREFIX` | (none) | URL prefix when served behind a reverse proxy (e.g. `/latency`) |
+| `LATENCY_UI_CACHE_DIR` | `~/.cache/latency_checker/audio_cache` | Cache directory |
+| `LATENCY_UI_CACHE_MAX_AGE_HOURS` | `24` | Cache eviction age in hours |
 
-#### Behind a reverse proxy
+### Behind a reverse proxy
 
-If you serve the UI through Apache/nginx at a sub-path, set `LATENCY_UI_PROXY_PREFIX` to the prefix you proxy on. The server will inject a `<base>` tag so all the app's relative URLs resolve correctly.
+If you serve the UI on a sub-path, set `LATENCY_UI_PROXY_PREFIX` to that prefix. The server injects a `<base>` tag into index.html so the page's relative URLs (`analyze`, `audio/TOKEN`, `check_cache`, etc.) all resolve correctly.
 
 **Apache example** — serve at `https://yourhost/latency/`:
 
@@ -134,55 +159,35 @@ ProxyPassReverse  /latency/ http://127.0.0.1:9090/
 LATENCY_UI_PROXY_PREFIX=/latency LATENCY_UI_PORT=9090 ./latency-ui.sh start
 ```
 
-### Splitting Mono to Stereo
-
-With `[diarize]` installed, the `audio-split` command splits a mono recording into
-stereo by speaker identity (LEFT=Human, RIGHT=AI):
-
-```bash
-# Split mono to stereo
-audio-split recording_mono.wav
-
-# Custom output path
-audio-split recording_mono.wav -o recording_stereo.wav
-
-# Then analyze the stereo result for best accuracy
-audio-analyze recording_stereo.wav
-```
-
-### Python API
+## Python API
 
 ```python
 from latency_checker import AudioAnalyzer
 
-# Create analyzer
 analyzer = AudioAnalyzer(
     file_path="conversation.wav",
     energy_threshold=50.0,
     ai_min_speaking_ms=20,
     human_min_speaking_ms=20,
-    min_silence_ms=2000
+    min_silence_ms=2000,
+    crosstalk_ratio=3.0,
 )
-
-# Run analysis
 results = analyzer.analyze()
 
-# Get human-readable summary
 print(analyzer.get_summary(results))
-
-# Save results
 analyzer.save_results("results.json", results, output_format='json')
 
-# Access specific statistics
 stats = results['statistics']
-print(f"Number of AI segments: {stats['num_ai_segments']}")
-print(f"Number of Human segments: {stats['num_human_segments']}")
-print(f"Average response latency: {stats['avg_latency']:.3f}s")
+print(f"Avg H→AI latency: {stats['avg_latency']:.3f}s  p95: {stats['p95_latency']:.3f}s")
+
+for lat in results['latencies']:
+    print(f"  {lat['human_stop']:.2f}s → {lat['ai_start']:.2f}s = {lat['latency']:.3f}s")
 ```
 
-## Output Example
+## Output
 
-### Text Summary
+### Text summary
+
 ```
 ============================================================
 AUDIO ANALYSIS RESULTS
@@ -212,88 +217,65 @@ Human→AI Response Latencies: 2
   2. Human stops 80.81s → AI responds 82.71s = 1.900s
 
 Latency Statistics:
-  Average: 1.930s
-  Min: 1.900s
-  Max: 1.960s
-  Median: 1.930s
-
+  Average: 1.930s   Median: 1.930s
+  Min: 1.900s       Max: 1.960s
+  p95: 1.957s       p99: 1.959s
 ============================================================
 ```
 
-### JSON Output Structure
+### JSON output
+
 ```json
 {
-  "file_info": {
-    "file_path": "conversation.wav",
-    "sample_rate": 48000,
-    "duration": 101.27,
-    "is_stereo": true,
-    "channels": 2
-  },
-  "channel_assignment": {
-    "left": "Human",
-    "right": "AI"
-  },
-  "ai_segments": [
-    {"start": 1.58, "end": 26.45, "duration": 24.87}
-  ],
-  "human_segments": [
-    {"start": 27.98, "end": 41.50, "duration": 13.52}
-  ],
+  "file_info":  { "duration": 101.27, "sample_rate": 48000, "is_stereo": true },
+  "channel_assignment": { "left": "Human", "right": "AI" },
+  "ai_segments":    [ {"start": 1.58, "end": 26.45, "duration": 24.87} ],
+  "human_segments": [ {"start": 27.98, "end": 41.50, "duration": 13.52} ],
   "latencies": [
-    {"human_stop": 41.50, "ai_start": 43.46, "latency": 1.96}
+    {"human_stop": 41.50, "ai_start": 43.46, "latency": 1.960, "outlier": false}
+  ],
+  "human_response_latencies": [
+    {"ai_stop": 26.45, "human_start": 27.98, "latency": 1.530, "outlier": false}
   ],
   "statistics": {
-    "num_ai_segments": 3,
-    "num_human_segments": 2,
-    "num_latencies": 2,
-    "avg_latency": 1.930,
-    "min_latency": 1.900,
-    "max_latency": 1.960,
-    "median_latency": 1.930
+    "num_ai_segments": 3, "num_human_segments": 2, "num_latencies": 2, "num_outliers": 0,
+    "avg_latency": 1.930, "trimmed_avg_latency": 1.930,
+    "median_latency": 1.930, "min_latency": 1.900, "max_latency": 1.960,
+    "p50_latency": 1.930, "p75_latency": 1.945,
+    "p90_latency": 1.954, "p95_latency": 1.957, "p99_latency": 1.959
+  },
+  "human_response_statistics": {
+    "count": 2, "num_outliers": 0,
+    "avg": 1.530, "trimmed_avg": 1.530, "median": 1.530,
+    "min": 1.400, "max": 1.660,
+    "p50": 1.530, "p75": 1.600, "p90": 1.640, "p95": 1.650, "p99": 1.658
   }
 }
 ```
 
-## Technical Details
+## Detection Algorithm
 
-### Detection Algorithm
-
-1. **Energy-based Detection**: Uses mean squared energy calculation over 10ms chunks
-2. **Debounced State Transitions**:
-   - Requires sustained energy (20ms default) to start speaking
-   - Requires sustained silence (2000ms default) to stop speaking
-3. **Post-processing Latency Calculation**: Matches human stops with subsequent AI starts
-4. **Backdating**: Transitions are backdated to when they actually occurred
-
-### Energy Calculation
-
-```python
-energy = np.mean(chunk ** 2) * 1e6  # Scale for reasonable range
-```
+1. **10ms energy chunks** per channel (mean squared × 1e6 scaled)
+2. **Debounced state machine** — sustained energy ≥ `ai_min_speaking_ms` / `human_min_speaking_ms` enters the speaking state; sustained silence ≥ `min_silence_ms` exits it
+3. **Crosstalk suppression** — when one channel is ≥ `crosstalk_ratio` × louder than the other, the weaker channel is muted for that chunk
+4. **Onset peak requirement** — a segment is only accepted if some chunk inside it exceeds `threshold × 5`, rejecting sustained background noise
+5. **Tail trim** — segment ends are trimmed back to the last chunk above `threshold × 10`, stripping trailing noise from the cutoff
+6. **Cross-channel turn logic** — an AI onset closes any open human segment; overlap/barge windows (±500ms) skip pairings that would produce bogus near-zero latencies
+7. **Post-processing** — each human-stop is paired with the next AI-start to yield a H→AI latency; symmetrically, each AI-stop pairs with the next human-start for the AI→H direction
 
 ## Use Cases
 
-- **AI Assistant Evaluation**: Measure response times of AI assistants
-- **Conversation Analysis**: Analyze turn-taking patterns in AI/Human interactions
-- **Performance Monitoring**: Track AI system response latencies over time
-- **Quality Assurance**: Ensure AI response times meet requirements
-- **Research**: Study conversation dynamics in human-AI interactions
+- AI assistant response-time evaluation
+- Turn-taking analysis for conversation design
+- Regression monitoring for production voice AI stacks
+- QA against SLAs
 
 ## Requirements
 
 - Python 3.8+
-- librosa >= 0.10.0
-- numpy >= 1.24.0
-- scipy >= 1.10.0
-- soundfile >= 0.12.0
-- click >= 8.1.0
-- pydub >= 0.25.0
+- librosa, numpy, scipy, soundfile, click, pydub
+- Optional: `resemblyzer` (for `[diarize]`), `fastapi` / `uvicorn` / `python-multipart` (for `[web]`)
 
 ## License
 
 MIT License
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues.
