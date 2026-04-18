@@ -204,6 +204,7 @@
         <button id="prev-latency" class="secondary">◀ Prev latency</button>
         <button id="next-latency" class="secondary">Next latency ▶</button>
         <span class="time" id="time-display">0:00 / 0:00</span>
+        <span class="time" id="hover-time" style="color:#ffb84a; min-width:80px;"></span>
         <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
           <span style="display:flex; align-items:center; gap:6px;">
             <span style="font-size:12px; color:#8892a0;">Zoom</span>
@@ -454,6 +455,33 @@ function render(data) {
   wavesurfer.on('interaction', updateTimeDisplay);
   wavesurfer.on('finish', () => {
     playBtn.textContent = '▶ Play';
+  });
+
+  // Hover-time readout: show the timestamp under the mouse cursor on the
+  // waveform, with millisecond precision so you can point at exact events.
+  const waveformEl = document.getElementById('waveform');
+  const hoverTimeEl = document.getElementById('hover-time');
+  waveformEl.addEventListener('mousemove', (e) => {
+    if (!wavesurfer) return;
+    const rect = waveformEl.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const fraction = Math.max(0, Math.min(1, x / rect.width));
+    const total = wavesurfer.getDuration();
+    if (!total) return;
+    // Account for scroll position on a zoomed waveform: use scroll state if available
+    const scroll = waveformEl.querySelector('div')?.shadowRoot?.querySelector('.scroll');
+    let t;
+    if (scroll) {
+      const scrollLeft = scroll.scrollLeft || 0;
+      const scrollWidth = scroll.scrollWidth || rect.width;
+      t = total * (scrollLeft + x) / scrollWidth;
+    } else {
+      t = total * fraction;
+    }
+    hoverTimeEl.textContent = `@ ${t.toFixed(2)}s`;
+  });
+  waveformEl.addEventListener('mouseleave', () => {
+    hoverTimeEl.textContent = '';
   });
 
   function updateTimeDisplay() {

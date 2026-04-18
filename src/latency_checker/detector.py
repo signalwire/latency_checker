@@ -54,7 +54,8 @@ class FinalDetector:
                  min_silence_ms: int = 2000,  # 2s for proper turn detection
                  crosstalk_ratio: float = 3.0,  # energy ratio fallback for suppression
                  crosstalk_window_ms: int = 500,  # rolling window for activity density
-                 min_ai_response_ms: int = 300):  # minimum AI segment duration to count as a real response
+                 min_ai_response_ms: int = 300,  # minimum AI segment duration to count as a real response
+                 min_human_speech_ms: int = 300):  # minimum human segment duration to count as a real turn end
         """
         Initialize detector.
 
@@ -73,6 +74,9 @@ class FinalDetector:
             min_ai_response_ms: AI segments shorter than this are treated as barges
                 or noise and excluded from latency pairing (default 300ms). Set to 0
                 to disable filtering.
+            min_human_speech_ms: Human segments shorter than this are treated as
+                breath noise / crosstalk blips and excluded from latency pairing
+                as "human stop" markers (default 300ms). Set to 0 to disable.
         """
         self.sample_rate = sample_rate
         self.energy_threshold = energy_threshold
@@ -82,6 +86,7 @@ class FinalDetector:
         self.crosstalk_ratio = crosstalk_ratio
         self.crosstalk_window_chunks = max(1, crosstalk_window_ms // 10)  # 10ms chunks
         self.min_ai_response_ms = min_ai_response_ms
+        self.min_human_speech_ms = min_human_speech_ms
 
         # 10ms chunks
         self.chunk_ms = 10
@@ -147,6 +152,34 @@ class FinalDetector:
         if len(chunk) == 0:
             return 0.0
         return np.mean(chunk ** 2) * 1e6
+
+    def _estimate_noise_floor(self, channel: np.ndarray, n_chunks: int) -> float:
+        """Estimate the noise floor for a channel.
+
+        Computes per-chunk energy and returns the 25th percentile of
+        chunks that are above 0 but below a reasonable speech threshold
+        (1000). This captures the typical noise level while excluding
+        genuine speech chunks.
+
+        Returns 0.0 if there's no detectable noise — in which case the
+        default energy threshold is fine.
+        """
+        # Sample every 5th chunk to keep this fast on long files
+        stride = max(1, n_chunks // 2000)
+        energies = []
+        for i in range(0, n_chunks, stride):
+            s = i * self.chunk_size
+            e = s + self.chunk_size
+            if e > len(channel):
+                break
+            eng = self.calculate_energy(channel[s:e])
+            # Only consider sub-speech energies — we're estimating noise,
+            # not typical speech.
+            if 0 < eng < 1000:
+                energies.append(eng)
+        if len(energies) < 10:
+            return 0.0
+        return float(np.percentile(energies, 75))
 
     def _segment_energy_features(self, audio: np.ndarray,
                                   segment: SpeechSegment) -> Tuple[float, float]:
@@ -442,18 +475,33 @@ class FinalDetector:
             else:
                 human_segments.append(tagged)
 
-        # Compute latencies: for each AI segment, find most recent unconsumed
-        # human segment that ended before it (same logic as stereo path).
-        # Skip short AI segments (likely barges or noise).
+        # Compute latencies (same logic as stereo path — see detect_turns for
+        # the detailed explanation). Short AI/human segments are skipped,
+        # and AI onsets that overlap with a human segment are not counted
+        # as latency events.
         min_ai_dur = self.min_ai_response_ms / 1000.0
+        min_human_dur = self.min_human_speech_ms / 1000.0
         latencies = []
         h_ptr = 0
         for a_seg in ai_segments:
             if a_seg.duration < min_ai_dur:
                 continue
+            ai_overlaps_human = False
+            for h in human_segments:
+                if h.start_time > a_seg.start_time:
+                    break
+                if h.duration < min_human_dur:
+                    continue
+                # Small tolerance for floating-point rounding on segment boundaries
+                if h.start_time <= a_seg.start_time <= h.end_time + 0.005:
+                    ai_overlaps_human = True
+                    break
+            if ai_overlaps_human:
+                continue
             best_idx = None
             while h_ptr < len(human_segments) and human_segments[h_ptr].end_time < a_seg.start_time:
-                best_idx = h_ptr
+                if human_segments[h_ptr].duration >= min_human_dur:
+                    best_idx = h_ptr
                 h_ptr += 1
             if best_idx is not None:
                 h_seg = human_segments[best_idx]
@@ -513,6 +561,18 @@ class FinalDetector:
         """
         n_chunks = min(len(ai_channel), len(human_channel)) // self.chunk_size
 
+        # Per-channel thresholds — same for now, just using the configured
+        # energy_threshold. Kept as separate variables so future work can
+        # adapt them per-channel (e.g., for noise-floor-aware detection).
+        ai_threshold = self.energy_threshold
+        human_threshold = self.energy_threshold
+
+        # Onset energy requirement: a new speaking segment must have at least
+        # one chunk with energy >= threshold * onset_peak_multiplier within
+        # the onset window. Prevents triggering on sustained low-level noise
+        # (bleed, hum, background) that merely crosses the threshold.
+        onset_peak_mult = 5.0
+
         # States
         ai_state = SpeakerState.SILENT
         human_state = SpeakerState.SILENT
@@ -522,6 +582,14 @@ class FinalDetector:
         ai_silence_chunks = 0
         human_speaking_chunks = 0
         human_silence_chunks = 0
+
+        # Track peak energy during onset — we require it to exceed
+        # threshold * onset_peak_mult before transitioning to SPEAKING, to
+        # reject sustained noise floor that barely crosses threshold.
+        ai_onset_peak = 0.0
+        human_onset_peak = 0.0
+        ai_onset_required = ai_threshold * onset_peak_mult
+        human_onset_required = human_threshold * onset_peak_mult
 
         # Segments
         ai_segments = []
@@ -555,28 +623,19 @@ class FinalDetector:
             human_energy = self.calculate_energy(human_chunk)
 
             # Crosstalk suppression using activity density + energy ratio.
-            # Density is computed from the pre-suppression window, but the
-            # window itself is updated *after* suppression so that sustained
-            # bleed doesn't inflate the density of the weaker channel.
-            ai_above = ai_energy > self.energy_threshold
-            human_above = human_energy > self.energy_threshold
+            # Thresholds are per-channel to account for differing noise floors.
+            ai_above = ai_energy > ai_threshold
+            human_above = human_energy > human_threshold
 
             if ai_above and human_above and self.crosstalk_ratio > 0:
-                # Energy ratio takes priority. Real crosstalk bleed is always
-                # quieter than the source (microphone isolation attenuates it),
-                # so if one channel is ~3x louder than the other, the louder
-                # one is the real speaker — suppress the weaker regardless of
-                # activity patterns. This is critical for detecting natural
-                # turn transitions where a new speaker starts mid-overlap at
-                # higher energy than the speaker who's trailing off.
-                if ai_energy >= human_energy * self.crosstalk_ratio:
+                # Ratio-based suppression, gated on the dominant channel
+                # having substantial energy (well above its own threshold)
+                # so noise doesn't trigger it.
+                if ai_energy >= human_energy * self.crosstalk_ratio and ai_energy >= ai_threshold * 5:
                     human_energy = 0.0
-                elif human_energy >= ai_energy * self.crosstalk_ratio:
+                elif human_energy >= ai_energy * self.crosstalk_ratio and human_energy >= human_threshold * 5:
                     ai_energy = 0.0
                 else:
-                    # Energies are similar; use activity density to decide.
-                    # Sustained speech (density >= 0.5) outweighs sporadic
-                    # bursts on the other channel.
                     ai_density = sum(ai_activity) / len(ai_activity) if ai_activity else 0.0
                     human_density = sum(human_activity) / len(human_activity) if human_activity else 0.0
                     if ai_density >= 0.5 and human_density < 0.5:
@@ -586,13 +645,13 @@ class FinalDetector:
 
             # Update activity windows *after* suppression so bleed doesn't
             # inflate the weaker channel's density
-            ai_activity.append(ai_energy > self.energy_threshold)
-            human_activity.append(human_energy > self.energy_threshold)
+            ai_activity.append(ai_energy > ai_threshold)
+            human_activity.append(human_energy > human_threshold)
 
             # Track last above-threshold chunk for end-of-file handling
-            if ai_energy > self.energy_threshold:
+            if ai_energy > ai_threshold:
                 ai_last_active_chunk = i
-            if human_energy > self.energy_threshold:
+            if human_energy > human_threshold:
                 human_last_active_chunk = i
 
             # Current time in seconds
@@ -601,25 +660,29 @@ class FinalDetector:
             # Process AI channel
             ai_just_started = False
             if ai_state == SpeakerState.SILENT:
-                if ai_energy > self.energy_threshold:
+                if ai_energy > ai_threshold:
                     ai_speaking_chunks += 1
                     ai_silence_chunks = 0
+                    ai_onset_peak = max(ai_onset_peak, ai_energy)
 
-                    if ai_speaking_chunks >= self.ai_speaking_chunks_required:
-                        # Start speaking - backdate to when energy first exceeded threshold
+                    # Transition only if we've sustained above threshold AND
+                    # seen at least one chunk with substantial energy. This
+                    # rejects sustained low-level noise / bleed floors.
+                    if (ai_speaking_chunks >= self.ai_speaking_chunks_required
+                            and ai_onset_peak >= ai_onset_required):
                         ai_state = SpeakerState.SPEAKING
                         ai_segment_start = current_time - ((self.ai_speaking_chunks_required - 1) * self.chunk_ms / 1000.0)
                         ai_just_started = True
                 else:
                     ai_speaking_chunks = 0
+                    ai_onset_peak = 0.0
 
             else:  # AI is speaking
-                if ai_energy <= self.energy_threshold:
+                if ai_energy <= ai_threshold:
                     ai_silence_chunks += 1
                     ai_speaking_chunks = 0
 
                     if ai_silence_chunks >= self.silence_chunks_required:
-                        # Stop speaking - backdate to when silence started
                         ai_state = SpeakerState.SILENT
                         segment_end = current_time - ((self.silence_chunks_required - 1) * self.chunk_ms / 1000.0)
 
@@ -632,24 +695,27 @@ class FinalDetector:
                             ))
                         ai_segment_start = None
                         ai_silence_chunks = 0
+                        ai_onset_peak = 0.0
                 else:
                     ai_silence_chunks = 0
 
             # Process Human channel
             if human_state == SpeakerState.SILENT:
-                if human_energy > self.energy_threshold:
+                if human_energy > human_threshold:
                     human_speaking_chunks += 1
                     human_silence_chunks = 0
+                    human_onset_peak = max(human_onset_peak, human_energy)
 
-                    if human_speaking_chunks >= self.human_speaking_chunks_required:
-                        # Start speaking - backdate
+                    if (human_speaking_chunks >= self.human_speaking_chunks_required
+                            and human_onset_peak >= human_onset_required):
                         human_state = SpeakerState.SPEAKING
                         human_segment_start = current_time - ((self.human_speaking_chunks_required - 1) * self.chunk_ms / 1000.0)
                 else:
                     human_speaking_chunks = 0
+                    human_onset_peak = 0.0
 
             else:  # Human is speaking
-                if human_energy <= self.energy_threshold:
+                if human_energy <= human_threshold:
                     human_silence_chunks += 1
                     human_speaking_chunks = 0
 
@@ -667,6 +733,7 @@ class FinalDetector:
                             ))
                         human_segment_start = None
                         human_silence_chunks = 0
+                        human_onset_peak = 0.0
                 else:
                     human_silence_chunks = 0
 
@@ -713,20 +780,55 @@ class FinalDetector:
 
         # Post-process: Calculate latencies from segments.
         # Single forward pass: for each AI segment, consume the most recent
-        # human stop that precedes it. h_ptr advances monotonically.
-        # AI segments shorter than min_ai_response_ms are treated as barges
-        # or crosstalk bursts and excluded from latency pairing.
+        # SIGNIFICANT human stop that STRICTLY precedes it (gap > 0).
+        # Short AI segments (< min_ai_response_ms) are treated as barges or
+        # crosstalk bursts and skipped. Short human segments (< min_human_speech_ms)
+        # are treated as breath noise / blips and skipped as turn-end markers.
+        # If AI starts during or at the end of a human segment, that's an
+        # overlap/barge — not a wait-time event — and we skip it entirely
+        # rather than pairing with an earlier human segment (which would
+        # produce a bogus latency that spans a mid-sentence pause).
         min_ai_dur = self.min_ai_response_ms / 1000.0
+        min_human_dur = self.min_human_speech_ms / 1000.0
         h_ptr = 0
         for a_seg in ai_segments:
             # Skip short AI segments — likely barges or noise, not real responses
             if a_seg.duration < min_ai_dur:
                 continue
 
-            # Advance h_ptr to the last human segment ending before this AI start
+            # Overlap check: skip AI segments that aren't real wait-time events.
+            #   1. If a significant human segment contains or ends at this AI
+            #      start, user was still speaking — barge.
+            #   2. If a significant human segment starts shortly AFTER this AI
+            #      start (within barge_window), user resumed immediately —
+            #      this was a mid-sentence pause, not a completed turn. The
+            #      earlier human segment ending was a pause, not a real stop.
+            # In both cases, pairing with the prior human segment would count
+            # a pause as wait time.
+            barge_window = 0.5  # if user resumes within 500ms, it was a pause
+            ai_overlaps_human = False
+            for h in human_segments:
+                if h.start_time > a_seg.start_time + barge_window:
+                    break  # far enough ahead, sorted so no more candidates
+                if h.duration < min_human_dur:
+                    continue
+                # User was still speaking at AI start (with small tolerance)
+                if h.start_time <= a_seg.start_time <= h.end_time + 0.005:
+                    ai_overlaps_human = True
+                    break
+                # User resumes within the barge window after AI onset
+                if a_seg.start_time <= h.start_time <= a_seg.start_time + barge_window:
+                    ai_overlaps_human = True
+                    break
+            if ai_overlaps_human:
+                continue
+
+            # Advance h_ptr to the last SIGNIFICANT human segment ending
+            # strictly before this AI start.
             best_idx = None
             while h_ptr < len(human_segments) and human_segments[h_ptr].end_time < a_seg.start_time:
-                best_idx = h_ptr
+                if human_segments[h_ptr].duration >= min_human_dur:
+                    best_idx = h_ptr
                 h_ptr += 1
 
             if best_idx is not None:

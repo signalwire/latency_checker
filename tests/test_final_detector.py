@@ -211,10 +211,10 @@ class TestCrosstalk:
         isolation attenuates it), so it should be below the 3x ratio
         threshold and get suppressed.
         """
-        human = make_sine(1.0, amplitude=0.015)  # energy ~225
+        human = make_sine(1.0, amplitude=0.05)  # realistic speech energy
         ai = np.concatenate([
             make_silence(0.4),
-            make_sine(0.1, amplitude=0.004),  # energy ~16, below threshold → not detected anyway
+            make_sine(0.1, amplitude=0.004),  # very quiet bleed — below threshold
             make_silence(0.5),
         ])
         result = _detector().detect_turns(ai, human)
@@ -225,18 +225,16 @@ class TestCrosstalk:
         """When the AI starts speaking at clearly higher energy than the
         human who's still trailing off, it's a real turn transition (not
         bleed) and must be detected."""
-        # Human speaks 0-1s, AI starts at 0.6s at higher energy (real
-        # turn change with brief overlap).
-        human = np.concatenate([make_sine(1.0, amplitude=0.015), make_silence(0.5)])
-        ai = np.concatenate([make_silence(0.6), make_sine(0.9, amplitude=0.04)])
+        human = np.concatenate([make_sine(1.0, amplitude=0.06), make_silence(0.5)])
+        ai = np.concatenate([make_silence(0.6), make_sine(0.9, amplitude=0.15)])
         result = _detector(min_silence_ms=200).detect_turns(ai, human)
         assert len(result['ai_segments']) >= 1
         assert len(result['human_segments']) >= 1
 
     def test_both_sustained_not_suppressed(self):
         """When both channels have sustained speech, neither is suppressed."""
-        ai = make_sine(1.0, amplitude=0.015)
-        human = make_sine(1.0, amplitude=0.012)
+        ai = make_sine(1.0, amplitude=0.05)
+        human = make_sine(1.0, amplitude=0.05)
         result = _detector().detect_turns(ai, human)
         assert len(result['ai_segments']) >= 1
         assert len(result['human_segments']) >= 1
@@ -261,8 +259,8 @@ class TestCrosstalk:
 
     def test_crosstalk_disabled(self):
         """With crosstalk_ratio=0, no suppression occurs."""
-        ai = make_sine(1.0, amplitude=0.015)
-        human = make_sine(1.0, amplitude=0.012)
+        ai = make_sine(1.0, amplitude=0.05)
+        human = make_sine(1.0, amplitude=0.05)
         result = _detector(crosstalk_ratio=0).detect_turns(ai, human)
         assert len(result['ai_segments']) >= 1
         assert len(result['human_segments']) >= 1
@@ -273,11 +271,10 @@ class TestCrosstalk:
         If AI has sustained speech and human has continuous low-level bleed,
         the human density should stay low because bleed chunks get suppressed.
         """
-        # AI: sustained speech for 2s
-        ai = make_sine(2.0, amplitude=0.02)
-        # Human: continuous low energy that's above threshold but weaker than AI
-        # This would build density to 1.0 if tracked pre-suppression
-        human = make_sine(2.0, amplitude=0.008)
+        # AI: sustained speech for 2s at realistic speech energy
+        ai = make_sine(2.0, amplitude=0.10)
+        # Human: continuous low energy (realistic weak bleed)
+        human = make_sine(2.0, amplitude=0.03)
         result = _detector(min_silence_ms=200).detect_turns(ai, human)
         # AI should be detected; human should be suppressed because even though
         # human energy is above threshold, AI's sustained density should win
@@ -288,12 +285,12 @@ class TestCrosstalk:
 # Helpers for mono tests — AI-like (flat) vs human-like (modulated) signals
 # ---------------------------------------------------------------------------
 
-def _make_ai_speech(duration_s, amplitude=0.02, sr=SR):
+def _make_ai_speech(duration_s, amplitude=0.06, sr=SR):
     """Flat-energy sine — mimics TTS output."""
     return make_sine(duration_s, amplitude=amplitude, sr=sr)
 
 
-def _make_human_speech(duration_s, amplitude=0.02, sr=SR):
+def _make_human_speech(duration_s, amplitude=0.06, sr=SR):
     """Amplitude-modulated sine — mimics human speech dynamics."""
     t = np.arange(int(sr * duration_s)) / sr
     envelope = 0.3 + 0.4 * np.abs(np.sin(2 * np.pi * 2.5 * t)) + \

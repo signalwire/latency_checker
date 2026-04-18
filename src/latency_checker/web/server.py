@@ -195,12 +195,12 @@ async def analyze(
             result = analyzer.analyze()
 
             # Transcode for playback if we don't already have it.
-            # 8kHz stereo PCM_16 is ~13MB for a 14-min call, small enough
-            # to transit a reverse proxy reliably but still good enough for
-            # speech visualization (human voice is mostly <4kHz).
+            # 16kHz stereo PCM_16: ~27MB for a 14-min call. 8kHz was
+            # smaller but caused sync issues in some browsers' audio
+            # decoders. 16kHz is the minimum for reliable seek precision.
             if not playback_path.exists():
                 loader = AudioLoader(str(tmp_path))
-                audio, sr = loader.load(target_sr=8000, mono=False)
+                audio, sr = loader.load(target_sr=16000, mono=False)
                 write_tmp = playback_path.with_suffix(".wav.tmp")
                 data_out = audio.T if audio.ndim == 2 else audio
                 sf.write(str(write_tmp), data_out, sr, subtype='PCM_16', format='WAV')
