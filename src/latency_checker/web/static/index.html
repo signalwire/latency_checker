@@ -3,133 +3,212 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Audio Latency Analyzer</title>
+<title>Audio Latency Analyzer — SignalWire</title>
+<link rel="icon" type="image/svg+xml" href="static/signalwire-logo.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Lexend:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
+  :root {
+    /* SignalWire brand tokens */
+    --sw-blue: #044EF4;
+    --sw-fuchsia: #F72A72;
+    --sw-purple: #601BE6;
+    --sw-turquoise: #40E0D0;
+    --sw-gold: #FFD700;
+
+    --bg-page: #0e0e18;
+    --bg-surface: #181a28;
+    --bg-surface-raised: #222436;
+
+    --fg-default: #f0f0f4;
+    --fg-secondary: #e8e8ec;
+    --fg-muted: #a0a0aa;
+
+    --border-default: rgba(255, 255, 255, 0.12);
+    --border-strong: rgba(255, 255, 255, 0.15);
+
+    --font-heading: 'Instrument Sans', sans-serif;
+    --font-body: 'Lexend', sans-serif;
+    --font-code: 'JetBrains Mono', monospace;
+
+    --radius-md: 8px;
+    --radius-lg: 10px;
+
+    --glow-fuchsia: 0 0 20px rgba(247, 42, 114, 0.25);
+  }
+
   * { box-sizing: border-box; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0f1117;
-    color: #e6e8eb;
+    font-family: var(--font-body);
+    background: var(--bg-page);
+    color: var(--fg-default);
     margin: 0;
     padding: 24px;
     min-height: 100vh;
+    font-size: 16px;
+    line-height: 1.6;
   }
   .wrap { max-width: 1200px; margin: 0 auto; }
-  h1 { margin: 0 0 4px; font-size: 22px; font-weight: 600; }
-  .subtitle { color: #8892a0; font-size: 13px; margin-bottom: 24px; }
 
+  /* Header / branding */
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    gap: 24px;
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand img { height: 26px; width: auto; display: block; }
+  .header-title .eyebrow {
+    font-family: var(--font-code);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    margin-bottom: 6px;
+  }
+  .header-title h1 {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: clamp(1.375rem, 2vw, 1.75rem);
+    letter-spacing: -0.02em;
+    color: var(--fg-default);
+    margin: 0;
+  }
+  .subtitle {
+    color: var(--fg-muted);
+    font-size: 13px;
+    margin-bottom: 24px;
+    max-width: 72ch;
+  }
+
+  /* Drop zone */
   .drop-zone {
-    border: 2px dashed #2a3040;
-    border-radius: 10px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-lg);
     padding: 40px;
     text-align: center;
     cursor: pointer;
-    transition: all 0.2s;
-    background: #151926;
+    transition: all 0.15s ease;
+    background: var(--bg-surface);
   }
   .drop-zone:hover, .drop-zone.drag {
-    border-color: #4f7dff;
-    background: #171e2e;
+    border-color: var(--sw-fuchsia);
+    box-shadow: var(--glow-fuchsia);
   }
-  .drop-zone p { margin: 0; color: #8892a0; }
+  .drop-zone p { margin: 0; color: var(--fg-muted); }
+  .drop-zone p strong { color: var(--fg-default); }
   .drop-zone input { display: none; }
 
+  /* Controls */
   .controls { display: flex; gap: 12px; margin: 16px 0; align-items: center; flex-wrap: wrap; }
-  .controls label { font-size: 12px; color: #8892a0; }
+  .controls label { font-size: 12px; color: var(--fg-muted); }
   .controls input[type=number] {
-    background: #151926;
-    border: 1px solid #2a3040;
-    color: #e6e8eb;
+    background: #2a2a2e;
+    border: 1px solid var(--border-strong);
+    color: var(--fg-default);
     padding: 4px 8px;
     border-radius: 4px;
     width: 80px;
     font-size: 13px;
+    font-family: var(--font-code);
+  }
+  .controls input[type=number]:focus {
+    outline: none;
+    border-color: var(--sw-blue);
+    box-shadow: 0 0 0 3px rgba(4, 78, 244, 0.3);
   }
 
+  /* Buttons */
   button {
-    background: #4f7dff;
-    color: white;
+    background: var(--sw-blue);
+    color: #ffffff;
     border: 0;
     padding: 8px 16px;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     font-size: 13px;
-    font-weight: 500;
-    transition: background 0.15s;
+    font-weight: 600;
+    font-family: var(--font-body);
+    transition: background 0.15s ease;
   }
-  button:hover { background: #3f6ae0; }
-  button:disabled { background: #2a3040; cursor: not-allowed; }
-  button.secondary { background: #1e2433; }
-  button.secondary:hover { background: #2a3040; }
+  button:hover { background: #0342cf; }
+  button:disabled { background: #333338; color: #73737e; cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    color: var(--fg-default);
+    border: 1px solid var(--border-strong);
+  }
+  button.secondary:hover { background: rgba(255, 255, 255, 0.06); }
 
   .result { margin-top: 24px; display: none; }
   .result.active { display: block; }
 
+  /* Waveform container (card = raised surface) */
   .waveform-container {
-    background: #151926;
-    border-radius: 10px;
+    background: var(--bg-surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
     padding: 16px;
     margin-bottom: 16px;
   }
   #waveform { margin-bottom: 8px; }
+
+  /* Legend */
   .legend {
     display: flex;
     gap: 16px;
     font-size: 12px;
-    color: #8892a0;
+    color: var(--fg-muted);
     margin-top: 8px;
     align-items: center;
   }
   .legend-item { display: flex; align-items: center; gap: 6px; }
-  .legend-swatch {
-    width: 12px;
-    height: 12px;
-    border-radius: 2px;
-  }
-  .ai-color { background: rgba(79, 125, 255, 0.45); }
-  .human-color { background: rgba(255, 149, 64, 0.45); }
-  .latency-color { background: #ff5571; }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
+  .ai-color { background: rgba(247, 42, 114, 0.45); }      /* fuchsia = AI */
+  .human-color { background: rgba(4, 78, 244, 0.45); }     /* blue = Human */
 
-  .player {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    margin: 12px 0;
-  }
+  /* Player */
+  .player { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
   .time {
-    font-family: "SF Mono", Menlo, monospace;
+    font-family: var(--font-code);
     font-size: 13px;
-    color: #8892a0;
+    color: var(--fg-muted);
   }
 
+  /* Stats panels */
   .stats-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
   }
   .panel {
-    background: #151926;
-    border-radius: 10px;
+    background: var(--bg-surface-raised);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
     padding: 16px;
   }
   .panel h3 {
     margin: 0 0 12px;
-    font-size: 13px;
-    font-weight: 600;
-    color: #8892a0;
+    font-family: var(--font-code);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--fg-muted);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.14em;
   }
   .stat-row {
     display: flex;
     justify-content: space-between;
     padding: 6px 0;
     font-size: 14px;
-    border-bottom: 1px solid #1e2433;
+    border-bottom: 1px solid var(--border-default);
   }
   .stat-row:last-child { border-bottom: 0; }
-  .stat-label { color: #8892a0; }
-  .stat-value { font-family: "SF Mono", Menlo, monospace; }
+  .stat-label { color: var(--fg-muted); }
+  .stat-value { font-family: var(--font-code); color: var(--fg-default); }
 
   .segments-list { max-height: 280px; overflow-y: auto; }
   .segment-item {
@@ -138,22 +217,23 @@
     align-items: center;
     padding: 8px 10px;
     margin-bottom: 4px;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     cursor: pointer;
     font-size: 13px;
-    transition: background 0.15s;
+    transition: background 0.15s ease;
   }
-  .segment-item:hover { background: #1e2433; }
-  .segment-item.ai { border-left: 3px solid #4f7dff; }
-  .segment-item.human { border-left: 3px solid #ff9540; }
-  .segment-item.latency { border-left: 3px solid #ff5571; }
-  .segment-time { font-family: "SF Mono", Menlo, monospace; color: #8892a0; }
+  .segment-item:hover { background: rgba(255, 255, 255, 0.06); }
+  .segment-item.ai { border-left: 3px solid var(--sw-fuchsia); }
+  .segment-item.human { border-left: 3px solid var(--sw-blue); }
+  .segment-item.latency { border-left: 3px solid var(--sw-fuchsia); }
+  .segment-time { font-family: var(--font-code); color: var(--fg-muted); }
 
   .error {
-    background: #3a1e22;
+    background: rgba(239, 68, 68, 0.12);
     color: #ff9ba8;
+    border: 1px solid rgba(239, 68, 68, 0.3);
     padding: 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     margin: 12px 0;
     font-size: 14px;
   }
@@ -161,14 +241,14 @@
   .loading {
     text-align: center;
     padding: 40px;
-    color: #8892a0;
+    color: var(--fg-muted);
   }
   .spinner {
     display: inline-block;
     width: 20px;
     height: 20px;
-    border: 2px solid #2a3040;
-    border-top-color: #4f7dff;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--sw-fuchsia);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     margin-right: 8px;
@@ -179,7 +259,15 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>Audio Latency Analyzer</h1>
+  <div class="header">
+    <div class="brand">
+      <img src="static/signalwire-logo.svg" alt="SignalWire">
+    </div>
+    <div class="header-title">
+      <div class="eyebrow">Latency Checker</div>
+      <h1>Audio Latency Analyzer</h1>
+    </div>
+  </div>
   <div class="subtitle">Upload a stereo or mono recording to visualize AI/Human turn-taking and response latencies.</div>
 
   <div class="drop-zone" id="dropzone">
@@ -204,10 +292,10 @@
         <button id="prev-latency" class="secondary">◀ Prev latency</button>
         <button id="next-latency" class="secondary">Next latency ▶</button>
         <span class="time" id="time-display">0:00 / 0:00</span>
-        <span class="time" id="hover-time" style="color:#ffb84a; min-width:80px;"></span>
+        <span class="time" id="hover-time" style="color:var(--sw-fuchsia); min-width:80px;"></span>
         <span style="margin-left:auto; display:flex; align-items:center; gap:12px;">
           <span style="display:flex; align-items:center; gap:6px;">
-            <span style="font-size:12px; color:#8892a0;">Zoom</span>
+            <span style="font-size:12px; color:var(--fg-muted);">Zoom</span>
             <input type="range" id="zoom" min="20" max="400" value="100" style="width:140px;">
           </span>
           <button id="clear-btn" class="secondary" title="Remove from cache and reset">Clear</button>
@@ -216,17 +304,17 @@
       <div class="legend">
         <div class="legend-item"><div class="legend-swatch ai-color"></div>AI</div>
         <div class="legend-item"><div class="legend-swatch human-color"></div>Human</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:rgba(255,85,113,0.6);"></div>H→AI latency</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:rgba(79,182,224,0.6);"></div>AI→H latency</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:rgba(247,42,114,0.6);"></div>H→AI latency</div>
+        <div class="legend-item"><div class="legend-swatch" style="background:rgba(64,224,208,0.6);"></div>AI→H latency</div>
       </div>
-      <div id="latency-chart-container" style="margin-top:16px; border-top:1px solid #1e2433; padding-top:12px;">
+      <div id="latency-chart-container" style="margin-top:16px; border-top:1px solid var(--border-default); padding-top:12px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <span style="font-size:11px; color:#8892a0; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">
+          <span style="font-family:var(--font-code); font-size:11px; color:var(--fg-muted); text-transform:uppercase; letter-spacing:0.14em;">
             Latency Timeline
-            <span style="color:#ff5571; margin-left:12px; text-transform:none;">● H→AI</span>
-            <span style="color:#4fb6e0; margin-left:8px; text-transform:none;">● AI→H</span>
+            <span style="color:var(--sw-fuchsia); margin-left:12px; text-transform:none; letter-spacing:normal;">● H→AI</span>
+            <span style="color:var(--sw-turquoise); margin-left:8px; text-transform:none; letter-spacing:normal;">● AI→H</span>
           </span>
-          <span style="font-size:11px; color:#8892a0;" id="chart-hover">click a bar to jump to that turn</span>
+          <span style="font-size:11px; color:var(--fg-muted);" id="chart-hover">click a bar to jump to that turn</span>
         </div>
         <svg id="latency-chart" width="100%" height="140" style="display:block;"></svg>
       </div>
@@ -375,9 +463,9 @@ function render(data) {
 
   const opts = {
     container: '#waveform',
-    waveColor: '#3a4556',
-    progressColor: '#6b7b95',
-    cursorColor: '#e6e8eb',
+    waveColor: '#3a4556',                    // neutral gray (mono only)
+    progressColor: 'rgba(247, 42, 114, 0.85)', // fuchsia progress
+    cursorColor: '#f0f0f4',
     height: isStereo ? 80 : 120,
     barWidth: 2,
     barGap: 1,
@@ -387,9 +475,10 @@ function render(data) {
     plugins: [regions],
   };
   if (isStereo) {
+    // LEFT=Human (blue), RIGHT=AI (fuchsia, the primary subject)
     opts.splitChannels = [
-      { waveColor: 'rgba(255, 149, 64, 0.8)', progressColor: 'rgba(255, 149, 64, 1.0)' },
-      { waveColor: 'rgba(79, 125, 255, 0.8)', progressColor: 'rgba(79, 125, 255, 1.0)' },
+      { waveColor: 'rgba(4, 78, 244, 0.8)',   progressColor: 'rgba(4, 78, 244, 1.0)' },
+      { waveColor: 'rgba(247, 42, 114, 0.8)', progressColor: 'rgba(247, 42, 114, 1.0)' },
     ];
   }
 
@@ -424,45 +513,45 @@ function render(data) {
   xhr.send();
 
   wavesurfer.on('ready', () => {
-    // AI segments (blue regions)
+    // AI segments — fuchsia (SignalWire's AI is the primary subject)
     data.ai_segments.forEach(seg => {
       regions.addRegion({
         start: seg.start,
         end: seg.end,
-        color: 'rgba(79, 125, 255, 0.2)',
+        color: 'rgba(247, 42, 114, 0.2)',
         drag: false,
         resize: false,
         content: 'AI',
       });
     });
-    // Human segments (orange regions)
+    // Human segments — blue (structural/secondary)
     data.human_segments.forEach(seg => {
       regions.addRegion({
         start: seg.start,
         end: seg.end,
-        color: 'rgba(255, 149, 64, 0.2)',
+        color: 'rgba(4, 78, 244, 0.2)',
         drag: false,
         resize: false,
         content: 'H',
       });
     });
-    // Latency markers — Human → AI (red)
+    // Latency markers — Human → AI (fuchsia — the primary metric)
     data.latencies.forEach(lat => {
       regions.addRegion({
         start: lat.human_stop,
         end: lat.ai_start,
-        color: 'rgba(255, 85, 113, 0.45)',
+        color: 'rgba(247, 42, 114, 0.45)',
         drag: false,
         resize: false,
         content: `H→AI ${lat.latency.toFixed(2)}s`,
       });
     });
-    // Latency markers — AI → Human (teal/blue)
+    // Latency markers — AI → Human (turquoise — secondary info)
     (data.human_response_latencies || []).forEach(lat => {
       regions.addRegion({
         start: lat.ai_stop,
         end: lat.human_start,
-        color: 'rgba(79, 182, 224, 0.45)',
+        color: 'rgba(64, 224, 208, 0.45)',
         drag: false,
         resize: false,
         content: `AI→H ${lat.latency.toFixed(2)}s`,
@@ -666,14 +755,14 @@ function renderLatencyChart(data) {
     const y = padT + plotH * (1 - i / 4);
     const val = (niceMax * i / 4).toFixed(2);
     svg.insertAdjacentHTML('beforeend',
-      `<line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="#1e2433" stroke-width="1"/>
-       <text x="${padL - 6}" y="${y + 3}" fill="#8892a0" font-size="10" text-anchor="end">${val}s</text>`
+      `<line x1="${padL}" y1="${y}" x2="${width - padR}" y2="${y}" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+       <text x="${padL - 6}" y="${y + 3}" fill="#a0a0aa" font-size="10" text-anchor="end">${val}s</text>`
     );
   }
 
   // X-axis baseline
   svg.insertAdjacentHTML('beforeend',
-    `<line x1="${padL}" y1="${padT + plotH}" x2="${width - padR}" y2="${padT + plotH}" stroke="#2a3040" stroke-width="1"/>`
+    `<line x1="${padL}" y1="${padT + plotH}" x2="${width - padR}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>`
   );
 
   // X-axis ticks: 4 labels evenly distributed
@@ -683,7 +772,7 @@ function renderLatencyChart(data) {
     const m = Math.floor(t / 60);
     const s = Math.floor(t % 60).toString().padStart(2, '0');
     svg.insertAdjacentHTML('beforeend',
-      `<text x="${x}" y="${height - 6}" fill="#8892a0" font-size="10" text-anchor="middle">${m}:${s}</text>`
+      `<text x="${x}" y="${height - 6}" fill="#a0a0aa" font-size="10" text-anchor="middle">${m}:${s}</text>`
     );
   }
 
@@ -695,7 +784,7 @@ function renderLatencyChart(data) {
     const x = padL + plotW * (lat.ai_start / duration) - barWidth / 2;
     const h = plotH * (lat.latency / niceMax);
     const y = padT + plotH - h;
-    const color = lat.outlier ? '#ffb84a' : '#ff5571';
+    const color = lat.outlier ? '#FFD700' : '#F72A72';
     svg.insertAdjacentHTML('beforeend',
       `<rect class="lat-bar" data-kind="ha" data-idx="${i}" data-seek="${lat.human_stop}"
              x="${x}" y="${y}" width="${barWidth}" height="${h}"
@@ -708,7 +797,7 @@ function renderLatencyChart(data) {
     const clipped = lat.latency > niceMax;
     const h = clipped ? plotH : plotH * (lat.latency / niceMax);
     const y = padT + plotH - h;
-    const color = lat.outlier ? '#9bd4ff' : '#4fb6e0';
+    const color = lat.outlier ? '#FFD700' : '#40E0D0';
     svg.insertAdjacentHTML('beforeend',
       `<rect class="lat-bar" data-kind="ah" data-idx="${i}" data-seek="${lat.ai_stop}"
              x="${x}" y="${y}" width="${barWidth}" height="${h}"
@@ -803,7 +892,7 @@ function renderSegmentLists(data) {
 
   document.getElementById('latencies-list').innerHTML = data.latencies
     .map(l => {
-      const tag = l.outlier ? ' <span style="color:#ffb84a; font-size:11px;">outlier</span>' : '';
+      const tag = l.outlier ? ' <span style="color:#FFD700; font-size:11px;">outlier</span>' : '';
       return `<div class="segment-item latency" data-start="${l.human_stop}"><span>${l.latency.toFixed(3)}s${tag}</span><span class="segment-time">${l.human_stop.toFixed(2)}s → ${l.ai_start.toFixed(2)}s</span></div>`;
     })
     .join('') || '<div style="color:#8892a0;font-size:13px;">None detected</div>';
@@ -811,7 +900,7 @@ function renderSegmentLists(data) {
   const humanResp = data.human_response_latencies || [];
   document.getElementById('human-resp-list').innerHTML = humanResp
     .map(l => {
-      const tag = l.outlier ? ' <span style="color:#ffb84a; font-size:11px;">outlier</span>' : '';
+      const tag = l.outlier ? ' <span style="color:#FFD700; font-size:11px;">outlier</span>' : '';
       return `<div class="segment-item human" data-start="${l.ai_stop}"><span>${l.latency.toFixed(3)}s${tag}</span><span class="segment-time">${l.ai_stop.toFixed(2)}s → ${l.human_start.toFixed(2)}s</span></div>`;
     })
     .join('') || '<div style="color:#8892a0;font-size:13px;">None detected</div>';
