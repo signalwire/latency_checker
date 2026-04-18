@@ -37,6 +37,15 @@ class ResponseLatency:
     outlier: bool = False  # set in post-processing: latency > mean + 1*std
 
 
+@dataclass
+class HumanResponseLatency:
+    """AI->Human response latency: time from AI finishing to user replying."""
+    ai_stop_time: float
+    human_start_time: float
+    latency: float
+    outlier: bool = False
+
+
 class FinalDetector:
     """
     Final correct detector with proper channel assignment and latency calculation.
@@ -96,6 +105,41 @@ class FinalDetector:
         self.ai_speaking_chunks_required = ai_min_speaking_ms // self.chunk_ms  # 2 chunks
         self.human_speaking_chunks_required = human_min_speaking_ms // self.chunk_ms  # 2 chunks
         self.silence_chunks_required = min_silence_ms // self.chunk_ms
+
+    def _build_human_response_stats(self, latencies):
+        """Build stats for AI->Human response latencies. Same structure as
+        the main latency stats but a separate namespace so the two don't
+        collide in the output dict.
+        """
+        vals = [l.latency for l in latencies] if latencies else []
+        trimmed_avg = None
+        if len(vals) >= 3:
+            trimmed_avg = float(np.mean(sorted(vals)[1:-1]))
+        num_outliers = 0
+        if len(vals) >= 3:
+            mean_v = float(np.mean(vals))
+            std_v = float(np.std(vals))
+            thresh = mean_v + std_v
+            for l in latencies:
+                l.outlier = l.latency > thresh
+            num_outliers = sum(1 for l in latencies if l.outlier)
+        percentiles = {}
+        if vals:
+            for p in (50, 75, 90, 95, 99):
+                percentiles[f'p{p}'] = float(np.percentile(vals, p))
+        else:
+            for p in (50, 75, 90, 95, 99):
+                percentiles[f'p{p}'] = None
+        return {
+            'count': len(latencies),
+            'num_outliers': num_outliers,
+            'avg': float(np.mean(vals)) if vals else None,
+            'trimmed_avg': trimmed_avg,
+            'min': float(np.min(vals)) if vals else None,
+            'max': float(np.max(vals)) if vals else None,
+            'median': float(np.median(vals)) if vals else None,
+            **percentiles,
+        }
 
     def _build_latency_stats(self, ai_segments, human_segments, latencies):
         """Build the statistics dict from segments and latencies.
@@ -843,8 +887,50 @@ class FinalDetector:
                 # Consume: start searching from after this human segment
                 h_ptr = best_idx + 1
 
-        # Build stats first so likely_tool flags are populated on the latencies
+        # --- AI -> Human response latencies (mirror of the above) ---
+        # For each human segment, find the most recent AI segment ending
+        # before it. Apply the same barge/overlap filtering in reverse:
+        # skip human segments that overlap an AI segment, or where AI
+        # starts within the barge window AFTER the human onset (interrupt).
+        human_response_latencies = []
+        a_ptr = 0
+        for h_seg in human_segments:
+            if h_seg.duration < min_human_dur:
+                continue
+            human_overlaps_ai = False
+            for a in ai_segments:
+                if a.start_time > h_seg.start_time + barge_window:
+                    break
+                if a.duration < min_ai_dur:
+                    continue
+                if a.start_time <= h_seg.start_time <= a.end_time + 0.005:
+                    human_overlaps_ai = True
+                    break
+                if h_seg.start_time <= a.start_time <= h_seg.start_time + barge_window:
+                    human_overlaps_ai = True
+                    break
+            if human_overlaps_ai:
+                continue
+            best_idx = None
+            while a_ptr < len(ai_segments) and ai_segments[a_ptr].end_time < h_seg.start_time:
+                if ai_segments[a_ptr].duration >= min_ai_dur:
+                    best_idx = a_ptr
+                a_ptr += 1
+            if best_idx is not None:
+                a = ai_segments[best_idx]
+                # Humans can reasonably take up to ~30s to reply; cap there
+                latency = h_seg.start_time - a.end_time
+                if 0 < latency < 30:
+                    human_response_latencies.append(HumanResponseLatency(
+                        ai_stop_time=a.end_time,
+                        human_start_time=h_seg.start_time,
+                        latency=latency,
+                    ))
+                a_ptr = best_idx + 1
+
+        # Build stats first so outlier flags are populated on the latencies
         stats = self._build_latency_stats(ai_segments, human_segments, latencies)
+        human_resp_stats = self._build_human_response_stats(human_response_latencies)
         return {
             'ai_segments': [{
                 'start': s.start_time,
@@ -862,5 +948,12 @@ class FinalDetector:
                 'latency': l.latency,
                 'outlier': l.outlier,
             } for l in latencies],
+            'human_response_latencies': [{
+                'ai_stop': l.ai_stop_time,
+                'human_start': l.human_start_time,
+                'latency': l.latency,
+                'outlier': l.outlier,
+            } for l in human_response_latencies],
             'statistics': stats,
+            'human_response_statistics': human_resp_stats,
         }

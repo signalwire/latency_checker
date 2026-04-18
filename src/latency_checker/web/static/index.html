@@ -220,7 +220,11 @@
       </div>
       <div id="latency-chart-container" style="margin-top:16px; border-top:1px solid #1e2433; padding-top:12px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <span style="font-size:11px; color:#8892a0; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">Latency Timeline</span>
+          <span style="font-size:11px; color:#8892a0; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">
+            Latency Timeline
+            <span style="color:#ff5571; margin-left:12px; text-transform:none;">● H→AI</span>
+            <span style="color:#4fb6e0; margin-left:8px; text-transform:none;">● AI→H</span>
+          </span>
           <span style="font-size:11px; color:#8892a0;" id="chart-hover">click a bar to jump to that turn</span>
         </div>
         <svg id="latency-chart" width="100%" height="120" style="display:block;"></svg>
@@ -239,8 +243,12 @@
         <div id="stats"></div>
       </div>
       <div class="panel">
-        <h3>Latencies</h3>
+        <h3>Human → AI Latencies</h3>
         <div class="segments-list" id="latencies-list"></div>
+      </div>
+      <div class="panel">
+        <h3>AI → Human Response Times</h3>
+        <div class="segments-list" id="human-resp-list"></div>
       </div>
       <div class="panel">
         <h3>AI Segments</h3>
@@ -539,9 +547,11 @@ function downloadJson(data) {
     file_info: data.file_info,
     channel_assignment: data.channel_assignment,
     statistics: data.statistics,
+    human_response_statistics: data.human_response_statistics,
     ai_segments: data.ai_segments,
     human_segments: data.human_segments,
     latencies: data.latencies,
+    human_response_latencies: data.human_response_latencies,
     mono_mode: data.mono_mode,
     classification_method: data.classification_method,
   };
@@ -549,12 +559,23 @@ function downloadJson(data) {
 }
 
 function downloadCsv(data) {
-  const rows = [['index', 'human_stop_s', 'ai_start_s', 'latency_s', 'outlier']];
+  const rows = [['direction', 'index', 'from_s', 'to_s', 'latency_s', 'outlier']];
   data.latencies.forEach((l, i) => {
     rows.push([
+      'human_to_ai',
       i + 1,
       l.human_stop.toFixed(3),
       l.ai_start.toFixed(3),
+      l.latency.toFixed(3),
+      l.outlier ? 'true' : 'false',
+    ]);
+  });
+  (data.human_response_latencies || []).forEach((l, i) => {
+    rows.push([
+      'ai_to_human',
+      i + 1,
+      l.ai_stop.toFixed(3),
+      l.human_start.toFixed(3),
       l.latency.toFixed(3),
       l.outlier ? 'true' : 'false',
     ]);
@@ -616,8 +637,9 @@ function renderLatencyChart(data) {
   const plotH = height - padT - padB;
 
   const duration = data.file_info.duration;
-  const maxLat = Math.max(...data.latencies.map(l => l.latency), 0.1);
-  // Round up to a nice number for the y-axis
+  const humanResp = data.human_response_latencies || [];
+  const allLats = [...data.latencies.map(l => l.latency), ...humanResp.map(l => l.latency), 0.1];
+  const maxLat = Math.max(...allLats);
   const niceMax = Math.ceil(maxLat * 10) / 10;
 
   // Baseline
@@ -649,15 +671,29 @@ function renderLatencyChart(data) {
     );
   }
 
-  // Bars
-  const barWidth = Math.max(2, Math.min(12, plotW / data.latencies.length - 2));
+  // Bars: H→AI (red/orange for outliers) and AI→H (blue/teal)
+  const totalBars = data.latencies.length + humanResp.length;
+  const barWidth = Math.max(2, Math.min(10, plotW / Math.max(totalBars, 1) - 2));
+
   data.latencies.forEach((lat, i) => {
     const x = padL + plotW * (lat.ai_start / duration) - barWidth / 2;
     const h = plotH * (lat.latency / niceMax);
     const y = padT + plotH - h;
     const color = lat.outlier ? '#ffb84a' : '#ff5571';
     svg.insertAdjacentHTML('beforeend',
-      `<rect class="lat-bar" data-idx="${i}" data-seek="${lat.human_stop}"
+      `<rect class="lat-bar" data-kind="ha" data-idx="${i}" data-seek="${lat.human_stop}"
+             x="${x}" y="${y}" width="${barWidth}" height="${h}"
+             fill="${color}" opacity="0.85" style="cursor:pointer"/>`
+    );
+  });
+
+  humanResp.forEach((lat, i) => {
+    const x = padL + plotW * (lat.human_start / duration) - barWidth / 2;
+    const h = plotH * (lat.latency / niceMax);
+    const y = padT + plotH - h;
+    const color = lat.outlier ? '#9bd4ff' : '#4fb6e0';
+    svg.insertAdjacentHTML('beforeend',
+      `<rect class="lat-bar" data-kind="ah" data-idx="${i}" data-seek="${lat.ai_stop}"
              x="${x}" y="${y}" width="${barWidth}" height="${h}"
              fill="${color}" opacity="0.85" style="cursor:pointer"/>`
     );
@@ -667,8 +703,11 @@ function renderLatencyChart(data) {
   svg.querySelectorAll('.lat-bar').forEach(bar => {
     bar.addEventListener('mouseenter', () => {
       const idx = parseInt(bar.dataset.idx, 10);
-      const lat = data.latencies[idx];
-      hover.textContent = `turn ${idx + 1}: ${lat.latency.toFixed(3)}s @ ${lat.ai_start.toFixed(2)}s${lat.outlier ? ' (outlier)' : ''}`;
+      const kind = bar.dataset.kind;
+      const lat = (kind === 'ha' ? data.latencies[idx] : humanResp[idx]);
+      const label = kind === 'ha' ? 'H→AI' : 'AI→H';
+      const at = kind === 'ha' ? lat.ai_start : lat.human_start;
+      hover.textContent = `${label} turn ${idx + 1}: ${lat.latency.toFixed(3)}s @ ${at.toFixed(2)}s${lat.outlier ? ' (outlier)' : ''}`;
       bar.setAttribute('opacity', '1');
     });
     bar.addEventListener('mouseleave', () => {
@@ -706,6 +745,15 @@ function renderStats(data) {
     rows.push(['Min', `${s.min_latency.toFixed(3)}s`]);
     rows.push(['Max', `${s.max_latency.toFixed(3)}s`]);
   }
+  const hr = data.human_response_statistics;
+  if (hr && hr.count) {
+    rows.push(['', '']);  // spacer
+    rows.push(['AI→Human count', hr.count]);
+    rows.push(['AI→Human avg', `${hr.avg.toFixed(3)}s`]);
+    rows.push(['AI→Human median', `${hr.median.toFixed(3)}s`]);
+    if (hr.p90 != null) rows.push(['AI→Human p90', `${hr.p90.toFixed(3)}s`]);
+    rows.push(['AI→Human min/max', `${hr.min.toFixed(3)}s / ${hr.max.toFixed(3)}s`]);
+  }
   if (data.mono_mode) {
     rows.push(['Classification', data.classification_method || 'unknown']);
   }
@@ -729,6 +777,14 @@ function renderSegmentLists(data) {
     .map(l => {
       const tag = l.outlier ? ' <span style="color:#ffb84a; font-size:11px;">outlier</span>' : '';
       return `<div class="segment-item latency" data-start="${l.human_stop}"><span>${l.latency.toFixed(3)}s${tag}</span><span class="segment-time">${l.human_stop.toFixed(2)}s → ${l.ai_start.toFixed(2)}s</span></div>`;
+    })
+    .join('') || '<div style="color:#8892a0;font-size:13px;">None detected</div>';
+
+  const humanResp = data.human_response_latencies || [];
+  document.getElementById('human-resp-list').innerHTML = humanResp
+    .map(l => {
+      const tag = l.outlier ? ' <span style="color:#ffb84a; font-size:11px;">outlier</span>' : '';
+      return `<div class="segment-item human" data-start="${l.ai_stop}"><span>${l.latency.toFixed(3)}s${tag}</span><span class="segment-time">${l.ai_stop.toFixed(2)}s → ${l.human_start.toFixed(2)}s</span></div>`;
     })
     .join('') || '<div style="color:#8892a0;font-size:13px;">None detected</div>';
 
