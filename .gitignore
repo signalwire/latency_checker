@@ -34,6 +34,11 @@ venv/
 latency-ui.log
 latency-ui.pid
 
+# Telemetry / sample files — user-specific, don't check in
+conversation_*.json
+*.png
+*.zip
+
 # Audio files (don't check in recordings)
 *.wav
 *.mp3
