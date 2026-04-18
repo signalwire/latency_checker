@@ -617,6 +617,17 @@ class FinalDetector:
         # (bleed, hum, background) that merely crosses the threshold.
         onset_peak_mult = 5.0
 
+        # Segment trimming: when closing a segment, truncate end time to
+        # the last chunk whose energy exceeded threshold * trim_mult. This
+        # removes trailing sustained low-level noise and occasional noise
+        # spikes that happen to exceed threshold but aren't real speech.
+        # 10x is empirically tuned to reliably separate speech from
+        # channel noise. Real speech peaks in the thousands; noise spikes
+        # top out around 200-400 on typical recordings.
+        trim_mult = 10.0
+        ai_trim_required = ai_threshold * trim_mult
+        human_trim_required = human_threshold * trim_mult
+
         # States
         ai_state = SpeakerState.SILENT
         human_state = SpeakerState.SILENT
@@ -646,6 +657,14 @@ class FinalDetector:
         # Track last above-threshold chunk per channel (for end-of-file segments)
         ai_last_active_chunk = -1
         human_last_active_chunk = -1
+
+        # Also track last *strong* chunk — energy above the onset peak
+        # requirement. We use this to trim segment end times back to the
+        # last chunk with real speech energy, so sustained low-level noise
+        # after the speaker actually stopped doesn't artificially extend
+        # the segment.
+        ai_last_strong_chunk = -1
+        human_last_strong_chunk = -1
 
         # We'll calculate latencies after detecting all segments
         latencies = []
@@ -698,6 +717,12 @@ class FinalDetector:
             if human_energy > human_threshold:
                 human_last_active_chunk = i
 
+            # Track last chunk above the trim threshold for end-time trimming
+            if ai_energy >= ai_trim_required:
+                ai_last_strong_chunk = i
+            if human_energy >= human_trim_required:
+                human_last_strong_chunk = i
+
             # Current time in seconds
             current_time = (i * self.chunk_ms) / 1000.0
 
@@ -728,7 +753,14 @@ class FinalDetector:
 
                     if ai_silence_chunks >= self.silence_chunks_required:
                         ai_state = SpeakerState.SILENT
-                        segment_end = current_time - ((self.silence_chunks_required - 1) * self.chunk_ms / 1000.0)
+                        # Segment end = end of last strong chunk (real speech),
+                        # not just last above-threshold chunk. This prevents
+                        # sustained low-level noise after the speaker stopped
+                        # from extending the segment end time.
+                        if ai_last_strong_chunk >= 0:
+                            segment_end = ((ai_last_strong_chunk + 1) * self.chunk_ms) / 1000.0
+                        else:
+                            segment_end = current_time - ((self.silence_chunks_required - 1) * self.chunk_ms / 1000.0)
 
                         if ai_segment_start is not None:
                             ai_segments.append(SpeechSegment(
@@ -764,9 +796,12 @@ class FinalDetector:
                     human_speaking_chunks = 0
 
                     if human_silence_chunks >= self.silence_chunks_required:
-                        # Stop speaking - backdate
                         human_state = SpeakerState.SILENT
-                        segment_end = current_time - ((self.silence_chunks_required - 1) * self.chunk_ms / 1000.0)
+                        # Trim to last strong chunk (see AI close above)
+                        if human_last_strong_chunk >= 0:
+                            segment_end = ((human_last_strong_chunk + 1) * self.chunk_ms) / 1000.0
+                        else:
+                            segment_end = current_time - ((self.silence_chunks_required - 1) * self.chunk_ms / 1000.0)
 
                         if human_segment_start is not None:
                             human_segments.append(SpeechSegment(
