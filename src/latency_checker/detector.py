@@ -562,21 +562,26 @@ class FinalDetector:
             human_above = human_energy > self.energy_threshold
 
             if ai_above and human_above and self.crosstalk_ratio > 0:
-                ai_density = sum(ai_activity) / len(ai_activity) if ai_activity else 0.0
-                human_density = sum(human_activity) / len(human_activity) if human_activity else 0.0
-
-                # Sustained speech (density >= 0.5) vs sporadic burst (density < 0.5):
-                # suppress the burst channel — it's bleed from the sustained one,
-                # even if the burst is instantaneously louder
-                if ai_density >= 0.5 and human_density < 0.5:
+                # Energy ratio takes priority. Real crosstalk bleed is always
+                # quieter than the source (microphone isolation attenuates it),
+                # so if one channel is ~3x louder than the other, the louder
+                # one is the real speaker — suppress the weaker regardless of
+                # activity patterns. This is critical for detecting natural
+                # turn transitions where a new speaker starts mid-overlap at
+                # higher energy than the speaker who's trailing off.
+                if ai_energy >= human_energy * self.crosstalk_ratio:
                     human_energy = 0.0
-                elif human_density >= 0.5 and ai_density < 0.5:
+                elif human_energy >= ai_energy * self.crosstalk_ratio:
                     ai_energy = 0.0
                 else:
-                    # Both sustained or both intermittent: fall back to energy ratio
-                    if ai_energy >= human_energy * self.crosstalk_ratio:
+                    # Energies are similar; use activity density to decide.
+                    # Sustained speech (density >= 0.5) outweighs sporadic
+                    # bursts on the other channel.
+                    ai_density = sum(ai_activity) / len(ai_activity) if ai_activity else 0.0
+                    human_density = sum(human_activity) / len(human_activity) if human_activity else 0.0
+                    if ai_density >= 0.5 and human_density < 0.5:
                         human_energy = 0.0
-                    elif human_energy >= ai_energy * self.crosstalk_ratio:
+                    elif human_density >= 0.5 and ai_density < 0.5:
                         ai_energy = 0.0
 
             # Update activity windows *after* suppression so bleed doesn't
