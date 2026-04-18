@@ -95,7 +95,13 @@ def _build_response(token: str, result: dict, filename: str | None, cached: bool
         "ai_segments": result["ai_segments"],
         "human_segments": result["human_segments"],
         "latencies": result["latencies"],
+        "human_response_latencies": result.get("human_response_latencies", []),
         "statistics": result["statistics"],
+        "human_response_statistics": result.get("human_response_statistics", {
+            "count": 0, "num_outliers": 0, "avg": None, "trimmed_avg": None,
+            "min": None, "max": None, "median": None,
+            "p50": None, "p75": None, "p90": None, "p95": None, "p99": None,
+        }),
         "file_info": result["file_info"],
         "channel_assignment": result["channel_assignment"],
         "mono_mode": result.get("mono_mode", False),
