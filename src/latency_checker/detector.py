@@ -628,6 +628,14 @@ class FinalDetector:
         ai_trim_required = ai_threshold * trim_mult
         human_trim_required = human_threshold * trim_mult
 
+        # A single above-trim chunk can be a sharp transient (click, tap,
+        # mouth noise) rather than real speech. Require a sustained run
+        # of strong chunks before accepting one as the "last strong" chunk
+        # used for segment-end trimming. 30ms is short enough to keep the
+        # tail of brief words intact but long enough to reject isolated
+        # 10ms spikes.
+        min_strong_run_chunks = 3
+
         # States
         ai_state = SpeakerState.SILENT
         human_state = SpeakerState.SILENT
@@ -658,13 +666,16 @@ class FinalDetector:
         ai_last_active_chunk = -1
         human_last_active_chunk = -1
 
-        # Also track last *strong* chunk — energy above the onset peak
-        # requirement. We use this to trim segment end times back to the
-        # last chunk with real speech energy, so sustained low-level noise
-        # after the speaker actually stopped doesn't artificially extend
-        # the segment.
+        # Also track last *strong* chunk — a chunk above the trim
+        # threshold that is part of a sustained run of strong chunks
+        # (see min_strong_run_chunks). We use this to trim segment end
+        # times back to the last chunk with real speech energy, so
+        # trailing low-level noise and single-chunk spikes (clicks,
+        # taps) don't artificially extend the segment.
         ai_last_strong_chunk = -1
         human_last_strong_chunk = -1
+        ai_strong_run = 0
+        human_strong_run = 0
 
         # We'll calculate latencies after detecting all segments
         latencies = []
@@ -717,11 +728,22 @@ class FinalDetector:
             if human_energy > human_threshold:
                 human_last_active_chunk = i
 
-            # Track last chunk above the trim threshold for end-time trimming
+            # Track last chunk above the trim threshold for end-time
+            # trimming, but only once we have a sustained run of strong
+            # chunks so isolated transients (clicks, taps) don't count
+            # as the segment's real endpoint.
             if ai_energy >= ai_trim_required:
-                ai_last_strong_chunk = i
+                ai_strong_run += 1
+                if ai_strong_run >= min_strong_run_chunks:
+                    ai_last_strong_chunk = i
+            else:
+                ai_strong_run = 0
             if human_energy >= human_trim_required:
-                human_last_strong_chunk = i
+                human_strong_run += 1
+                if human_strong_run >= min_strong_run_chunks:
+                    human_last_strong_chunk = i
+            else:
+                human_strong_run = 0
 
             # Current time in seconds
             current_time = (i * self.chunk_ms) / 1000.0
@@ -818,13 +840,16 @@ class FinalDetector:
 
             # Cross-channel turn-end (asymmetric): when the AI starts
             # speaking, the human's turn is definitively over — close the
-            # human segment immediately at their last active chunk rather
-            # than waiting for the min_silence_ms debounce.
+            # human segment immediately rather than waiting for the
+            # min_silence_ms debounce. Trim to the last *strong* chunk
+            # (threshold * trim_mult) so sporadic weak bursts (lip clicks,
+            # breath, faint noise) after real speech ended don't extend
+            # the segment — matching the normal silence-close behavior.
             # Human-start during AI speech is NOT a turn end (backchannel
             # or barge-in), so that case is intentionally not handled.
             if ai_just_started and human_state == SpeakerState.SPEAKING:
-                if human_segment_start is not None and human_last_active_chunk >= 0:
-                    h_end = ((human_last_active_chunk + 1) * self.chunk_ms) / 1000.0
+                if human_segment_start is not None and human_last_strong_chunk >= 0:
+                    h_end = ((human_last_strong_chunk + 1) * self.chunk_ms) / 1000.0
                     if h_end > human_segment_start:
                         human_segments.append(SpeechSegment(
                             speaker="human",
@@ -837,25 +862,30 @@ class FinalDetector:
                 human_silence_chunks = 0
                 human_speaking_chunks = 0
 
-        # Handle ongoing segments at file end: use the last above-threshold
-        # chunk tracked during the forward pass instead of scanning backward
+        # Handle ongoing segments at file end: trim to the last strong
+        # chunk (matching the normal silence-close path) so trailing
+        # weak bursts don't extend the segment end.
         if ai_state == SpeakerState.SPEAKING and ai_segment_start is not None:
-            ai_end = ((ai_last_active_chunk + 1) * self.chunk_ms) / 1000.0
-            ai_segments.append(SpeechSegment(
-                speaker="ai",
-                start_time=ai_segment_start,
-                end_time=ai_end,
-                duration=ai_end - ai_segment_start
-            ))
+            last = ai_last_strong_chunk if ai_last_strong_chunk >= 0 else ai_last_active_chunk
+            ai_end = ((last + 1) * self.chunk_ms) / 1000.0
+            if ai_end > ai_segment_start:
+                ai_segments.append(SpeechSegment(
+                    speaker="ai",
+                    start_time=ai_segment_start,
+                    end_time=ai_end,
+                    duration=ai_end - ai_segment_start
+                ))
 
         if human_state == SpeakerState.SPEAKING and human_segment_start is not None:
-            human_end = ((human_last_active_chunk + 1) * self.chunk_ms) / 1000.0
-            human_segments.append(SpeechSegment(
-                speaker="human",
-                start_time=human_segment_start,
-                end_time=human_end,
-                duration=human_end - human_segment_start
-            ))
+            last = human_last_strong_chunk if human_last_strong_chunk >= 0 else human_last_active_chunk
+            human_end = ((last + 1) * self.chunk_ms) / 1000.0
+            if human_end > human_segment_start:
+                human_segments.append(SpeechSegment(
+                    speaker="human",
+                    start_time=human_segment_start,
+                    end_time=human_end,
+                    duration=human_end - human_segment_start
+                ))
 
         # Post-process: Calculate latencies from segments.
         # Single forward pass: for each AI segment, consume the most recent
