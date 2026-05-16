@@ -794,6 +794,10 @@ class FinalDetector:
                         ai_segment_start = None
                         ai_silence_chunks = 0
                         ai_onset_peak = 0.0
+                        # Reset strong-chunk tracking so the next segment
+                        # doesn't inherit this one's endpoint.
+                        ai_last_strong_chunk = -1
+                        ai_strong_run = 0
                 else:
                     ai_silence_chunks = 0
 
@@ -835,6 +839,10 @@ class FinalDetector:
                         human_segment_start = None
                         human_silence_chunks = 0
                         human_onset_peak = 0.0
+                        # Reset strong-chunk tracking so the next segment
+                        # doesn't inherit this one's endpoint.
+                        human_last_strong_chunk = -1
+                        human_strong_run = 0
                 else:
                     human_silence_chunks = 0
 
@@ -861,6 +869,10 @@ class FinalDetector:
                 human_segment_start = None
                 human_silence_chunks = 0
                 human_speaking_chunks = 0
+                # Reset strong-chunk tracking so the next segment doesn't
+                # inherit this one's endpoint.
+                human_last_strong_chunk = -1
+                human_strong_run = 0
 
         # Handle ongoing segments at file end: trim to the last strong
         # chunk (matching the normal silence-close path) so trailing
