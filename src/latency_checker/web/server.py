@@ -19,8 +19,10 @@ Environment variables:
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
+import traceback
 import numpy as np
 import soundfile as sf
 from pathlib import Path
@@ -44,11 +46,26 @@ CACHE_DIR = Path(os.environ.get("LATENCY_UI_CACHE_DIR", str(_default_cache)))
 CACHE_MAX_AGE_HOURS = float(os.environ.get("LATENCY_UI_CACHE_MAX_AGE_HOURS", "24"))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Maximum accepted upload size. The endpoint is unauthenticated, so an
+# unbounded read would let a client exhaust disk and CPU (every upload is
+# transcoded and analyzed). 1 GB comfortably covers a multi-hour stereo
+# WAV while still bounding abuse. Override with LATENCY_UI_MAX_UPLOAD_MB.
+MAX_UPLOAD_MB = float(os.environ.get("LATENCY_UI_MAX_UPLOAD_MB", "1024"))
+MAX_UPLOAD_BYTES = int(MAX_UPLOAD_MB * 1024 * 1024)
+
+# Allowed upload extensions (also the formats the loader understands).
+ALLOWED_SUFFIXES = {".wav", ".mp3", ".mp4", ".m4a", ".flac", ".ogg", ".aac"}
+
 # URL prefix when served behind a reverse proxy. The server injects a
 # <base href="{prefix}/"> tag into index.html so all relative URLs in the
 # page (analyze, audio/TOKEN, check_cache, etc.) resolve under the prefix
 # without the JS having to guess from window.location.
 _raw_prefix = os.environ.get("LATENCY_UI_PROXY_PREFIX", "").strip()
+# Restrict to a conservative URL-path charset. The prefix is injected into
+# index.html as a <base href> value, so anything outside this set (quotes,
+# angle brackets, whitespace) is dropped to prevent HTML/attribute injection
+# even from a misconfigured environment.
+_raw_prefix = re.sub(r"[^A-Za-z0-9/_\-]", "", _raw_prefix)
 # Normalize: ensure leading slash, strip trailing slash, empty means root
 if _raw_prefix and not _raw_prefix.startswith("/"):
     _raw_prefix = "/" + _raw_prefix
@@ -165,17 +182,33 @@ async def analyze(
     the same params skips both transcode and analysis.
     """
     suffix = Path(file.filename or "audio").suffix.lower() or ".wav"
-    if suffix not in {".wav", ".mp3", ".mp4", ".m4a", ".flac", ".ogg", ".aac"}:
-        raise HTTPException(status_code=400, detail=f"Unsupported format: {suffix}")
+    if suffix not in ALLOWED_SUFFIXES:
+        # Do NOT echo the client-supplied suffix back — it would be a
+        # reflected-injection vector if rendered. List the allowed set.
+        allowed = ", ".join(sorted(s.lstrip(".") for s in ALLOWED_SUFFIXES))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format. Allowed: {allowed}",
+        )
 
-    # Hash the upload while streaming it to a temp file
+    # Hash the upload while streaming it to a temp file, enforcing a size
+    # cap so an unauthenticated client can't exhaust disk/CPU.
     hasher = hashlib.sha1()
+    total = 0
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     try:
         while True:
             chunk = await file.read(1024 * 1024)
             if not chunk:
                 break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                tmp.close()
+                Path(tmp.name).unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large (limit {MAX_UPLOAD_MB:.0f} MB)",
+                )
             hasher.update(chunk)
             tmp.write(chunk)
     finally:
@@ -221,7 +254,11 @@ async def analyze(
         _evict_old_cache_entries()
     except Exception as e:
         tmp_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
+        # Log the real error server-side, but don't reflect exception text
+        # (which can include internal paths or input-derived strings) back
+        # to the client.
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Analysis failed while processing the audio file")
 
     return JSONResponse(_build_response(token, result, file.filename, cached=cache_hit))
 

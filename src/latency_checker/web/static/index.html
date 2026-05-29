@@ -402,6 +402,21 @@ let wavesurfer = null;
 let regions = null;
 let currentLatencies = [];
 
+// Render an error message as TEXT, never HTML. The message can contain
+// server-supplied strings (e.g. an echoed filename or exception text),
+// so interpolating it into innerHTML would be an XSS sink. textContent
+// guarantees it's shown literally and never parsed as markup.
+function showError(msg) {
+  errorMsg.textContent = '';
+  const div = document.createElement('div');
+  div.className = 'error';
+  div.textContent = msg;
+  errorMsg.appendChild(div);
+}
+function clearError() {
+  errorMsg.textContent = '';
+}
+
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
 dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
@@ -448,7 +463,7 @@ async function sha1Hex(file) {
 }
 
 async function uploadFile(file) {
-  errorMsg.innerHTML = '';
+  clearError();
   loading.style.display = 'block';
   result.classList.remove('active');
 
@@ -487,7 +502,7 @@ async function uploadFile(file) {
     const data = await resp.json();
     render(data);
   } catch (e) {
-    errorMsg.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+    showError(`Error: ${e.message}`);
   } finally {
     loading.style.display = 'none';
     loading.innerHTML = '<span class="spinner"></span>Analyzing...';
@@ -540,7 +555,7 @@ function render(data) {
   xhr.onload = () => {
     console.log('[latency-ui] audio xhr status:', xhr.status, xhr.response ? xhr.response.byteLength + ' bytes' : 'no body');
     if (xhr.status < 200 || xhr.status >= 300) {
-      errorMsg.innerHTML = `<div class="error">Audio load failed: HTTP ${xhr.status}</div>`;
+      showError(`Audio load failed: HTTP ${xhr.status}`);
       return;
     }
     const blob = new Blob([xhr.response], { type: 'audio/wav' });
@@ -548,7 +563,7 @@ function render(data) {
   };
   xhr.onerror = () => {
     console.error('[latency-ui] audio xhr error');
-    errorMsg.innerHTML = `<div class="error">Audio load failed: network error</div>`;
+    showError('Audio load failed: network error');
   };
   xhr.onprogress = (e) => {
     if (e.lengthComputable) {
@@ -737,7 +752,7 @@ async function clearCurrent(token) {
     wavesurfer = null;
   }
   result.classList.remove('active');
-  errorMsg.innerHTML = '';
+  clearError();
   fileInput.value = '';
 
   if (token) {
