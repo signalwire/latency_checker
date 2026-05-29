@@ -34,6 +34,22 @@ is_running() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# Echo "HOST:PORT" for a running server, parsed from its actual command
+# line (/proc/PID/cmdline) so status reflects how the process was really
+# started — the current shell's env vars may differ from start time.
+# Falls back to the configured HOST/PORT if the cmdline isn't readable.
+running_host_port() {
+  local pid="$1"
+  local host="$HOST" port="$PORT"
+  if [[ -r "/proc/$pid/cmdline" ]]; then
+    local args
+    args="$(tr '\0' ' ' < "/proc/$pid/cmdline")"
+    [[ "$args" =~ --host[[:space:]]+([^[:space:]]+) ]] && host="${BASH_REMATCH[1]}"
+    [[ "$args" =~ --port[[:space:]]+([^[:space:]]+) ]] && port="${BASH_REMATCH[1]}"
+  fi
+  echo "$host:$port"
+}
+
 cmd_start() {
   if is_running; then
     echo "Already running (pid $(cat "$PID_FILE"))"
@@ -104,7 +120,9 @@ cmd_restart() {
 
 cmd_status() {
   if is_running; then
-    echo "Running (pid $(cat "$PID_FILE")) on $HOST:$PORT"
+    local pid
+    pid="$(cat "$PID_FILE")"
+    echo "Running (pid $pid) on $(running_host_port "$pid")"
     echo "Log: $LOG_FILE"
   else
     echo "Not running"
