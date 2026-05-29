@@ -21,11 +21,25 @@ class SpeakerState(Enum):
 
 @dataclass
 class SpeechSegment:
-    """A speech segment."""
+    """A speech segment.
+
+    `duration` is the trimmed extent (end_time - start_time), where
+    end_time has been pulled back to the last strong-energy chunk to
+    strip trailing noise. `full_duration` is the untrimmed extent —
+    start to the last above-threshold chunk — and is what the
+    min-duration qualification gates use, so trimming can never push
+    a real (but brief) segment under the floor that decides whether
+    it counts as a turn. Defaults to `duration` when not set.
+    """
     speaker: str  # "ai" or "human"
     start_time: float
     end_time: float
     duration: float
+    full_duration: float = None
+
+    def __post_init__(self):
+        if self.full_duration is None:
+            self.full_duration = self.duration
 
 
 @dataclass
@@ -785,11 +799,13 @@ class FinalDetector:
                             segment_end = current_time - ((self.silence_chunks_required - 1) * self.chunk_ms / 1000.0)
 
                         if ai_segment_start is not None:
+                            full_end = ((ai_last_active_chunk + 1) * self.chunk_ms) / 1000.0
                             ai_segments.append(SpeechSegment(
                                 speaker="ai",
                                 start_time=ai_segment_start,
                                 end_time=segment_end,
-                                duration=segment_end - ai_segment_start
+                                duration=segment_end - ai_segment_start,
+                                full_duration=max(full_end, segment_end) - ai_segment_start
                             ))
                         ai_segment_start = None
                         ai_silence_chunks = 0
@@ -830,11 +846,13 @@ class FinalDetector:
                             segment_end = current_time - ((self.silence_chunks_required - 1) * self.chunk_ms / 1000.0)
 
                         if human_segment_start is not None:
+                            full_end = ((human_last_active_chunk + 1) * self.chunk_ms) / 1000.0
                             human_segments.append(SpeechSegment(
                                 speaker="human",
                                 start_time=human_segment_start,
                                 end_time=segment_end,
-                                duration=segment_end - human_segment_start
+                                duration=segment_end - human_segment_start,
+                                full_duration=max(full_end, segment_end) - human_segment_start
                             ))
                         human_segment_start = None
                         human_silence_chunks = 0
@@ -859,11 +877,13 @@ class FinalDetector:
                 if human_segment_start is not None and human_last_strong_chunk >= 0:
                     h_end = ((human_last_strong_chunk + 1) * self.chunk_ms) / 1000.0
                     if h_end > human_segment_start:
+                        full_end = ((human_last_active_chunk + 1) * self.chunk_ms) / 1000.0
                         human_segments.append(SpeechSegment(
                             speaker="human",
                             start_time=human_segment_start,
                             end_time=h_end,
-                            duration=h_end - human_segment_start
+                            duration=h_end - human_segment_start,
+                            full_duration=max(full_end, h_end) - human_segment_start
                         ))
                 human_state = SpeakerState.SILENT
                 human_segment_start = None
@@ -881,22 +901,26 @@ class FinalDetector:
             last = ai_last_strong_chunk if ai_last_strong_chunk >= 0 else ai_last_active_chunk
             ai_end = ((last + 1) * self.chunk_ms) / 1000.0
             if ai_end > ai_segment_start:
+                full_end = ((ai_last_active_chunk + 1) * self.chunk_ms) / 1000.0
                 ai_segments.append(SpeechSegment(
                     speaker="ai",
                     start_time=ai_segment_start,
                     end_time=ai_end,
-                    duration=ai_end - ai_segment_start
+                    duration=ai_end - ai_segment_start,
+                    full_duration=max(full_end, ai_end) - ai_segment_start
                 ))
 
         if human_state == SpeakerState.SPEAKING and human_segment_start is not None:
             last = human_last_strong_chunk if human_last_strong_chunk >= 0 else human_last_active_chunk
             human_end = ((last + 1) * self.chunk_ms) / 1000.0
             if human_end > human_segment_start:
+                full_end = ((human_last_active_chunk + 1) * self.chunk_ms) / 1000.0
                 human_segments.append(SpeechSegment(
                     speaker="human",
                     start_time=human_segment_start,
                     end_time=human_end,
-                    duration=human_end - human_segment_start
+                    duration=human_end - human_segment_start,
+                    full_duration=max(full_end, human_end) - human_segment_start
                 ))
 
         # Post-process: Calculate latencies from segments.
@@ -913,8 +937,10 @@ class FinalDetector:
         min_human_dur = self.min_human_speech_ms / 1000.0
         h_ptr = 0
         for a_seg in ai_segments:
-            # Skip short AI segments — likely barges or noise, not real responses
-            if a_seg.duration < min_ai_dur:
+            # Skip short AI segments — likely barges or noise, not real responses.
+            # Use full_duration (untrimmed extent) so end-trimming can't drop a
+            # real-but-brief response below the floor.
+            if a_seg.full_duration < min_ai_dur:
                 continue
 
             # Overlap check: skip AI segments that aren't real wait-time events.
@@ -938,7 +964,7 @@ class FinalDetector:
             for h in human_segments:
                 if h.start_time > a_seg.start_time + barge_window:
                     break  # far enough ahead, sorted so no more candidates
-                if h.duration < min_human_dur:
+                if h.full_duration < min_human_dur:
                     continue
                 # User was still speaking at AI start (with small tolerance)
                 if h.start_time <= a_seg.start_time <= h.end_time + 0.005:
@@ -949,7 +975,7 @@ class FinalDetector:
                 # in-window segments are back-channels during the AI's
                 # response, not the user continuing a prior turn.
                 if (a_seg.start_time <= h.start_time <= a_seg.start_time + barge_window
-                        and h.duration >= min_resumption_dur):
+                        and h.full_duration >= min_resumption_dur):
                     ai_overlaps_human = True
                     break
             if ai_overlaps_human:
@@ -959,7 +985,7 @@ class FinalDetector:
             # strictly before this AI start.
             best_idx = None
             while h_ptr < len(human_segments) and human_segments[h_ptr].end_time < a_seg.start_time:
-                if human_segments[h_ptr].duration >= min_human_dur:
+                if human_segments[h_ptr].full_duration >= min_human_dur:
                     best_idx = h_ptr
                 h_ptr += 1
 
@@ -983,13 +1009,13 @@ class FinalDetector:
         human_response_latencies = []
         a_ptr = 0
         for h_seg in human_segments:
-            if h_seg.duration < min_human_dur:
+            if h_seg.full_duration < min_human_dur:
                 continue
             human_overlaps_ai = False
             for a in ai_segments:
                 if a.start_time > h_seg.start_time + barge_window:
                     break
-                if a.duration < min_ai_dur:
+                if a.full_duration < min_ai_dur:
                     continue
                 if a.start_time <= h_seg.start_time <= a.end_time + 0.005:
                     human_overlaps_ai = True
@@ -998,14 +1024,14 @@ class FinalDetector:
                 # onset — only count as a real resumption if substantial,
                 # by the same back-channel logic as the H→AI direction.
                 if (h_seg.start_time <= a.start_time <= h_seg.start_time + barge_window
-                        and a.duration >= min_resumption_dur):
+                        and a.full_duration >= min_resumption_dur):
                     human_overlaps_ai = True
                     break
             if human_overlaps_ai:
                 continue
             best_idx = None
             while a_ptr < len(ai_segments) and ai_segments[a_ptr].end_time < h_seg.start_time:
-                if ai_segments[a_ptr].duration >= min_ai_dur:
+                if ai_segments[a_ptr].full_duration >= min_ai_dur:
                     best_idx = a_ptr
                 a_ptr += 1
             if best_idx is not None:
