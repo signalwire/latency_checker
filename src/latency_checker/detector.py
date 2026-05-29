@@ -927,6 +927,13 @@ class FinalDetector:
             # In both cases, pairing with the prior human segment would count
             # a pause as wait time.
             barge_window = 0.5  # if user resumes within 500ms, it was a pause
+            # Resumption-vs-back-channel distinguisher: a real "user was
+            # talking, AI cut in, user kept going" segment is substantial
+            # (multi-word). A back-channel ("yeah", "mm-hmm") during the
+            # AI's response is short and shouldn't suppress the latency
+            # for the prior real turn. 1s is comfortably longer than any
+            # typical back-channel but shorter than a real continuation.
+            min_resumption_dur = 1.0
             ai_overlaps_human = False
             for h in human_segments:
                 if h.start_time > a_seg.start_time + barge_window:
@@ -937,8 +944,12 @@ class FinalDetector:
                 if h.start_time <= a_seg.start_time <= h.end_time + 0.005:
                     ai_overlaps_human = True
                     break
-                # User resumes within the barge window after AI onset
-                if a_seg.start_time <= h.start_time <= a_seg.start_time + barge_window:
+                # User resumes within the barge window after AI onset —
+                # only count as a real resumption if substantial; short
+                # in-window segments are back-channels during the AI's
+                # response, not the user continuing a prior turn.
+                if (a_seg.start_time <= h.start_time <= a_seg.start_time + barge_window
+                        and h.duration >= min_resumption_dur):
                     ai_overlaps_human = True
                     break
             if ai_overlaps_human:
@@ -983,7 +994,11 @@ class FinalDetector:
                 if a.start_time <= h_seg.start_time <= a.end_time + 0.005:
                     human_overlaps_ai = True
                     break
-                if h_seg.start_time <= a.start_time <= h_seg.start_time + barge_window:
+                # AI resumes within the barge window after the human
+                # onset — only count as a real resumption if substantial,
+                # by the same back-channel logic as the H→AI direction.
+                if (h_seg.start_time <= a.start_time <= h_seg.start_time + barge_window
+                        and a.duration >= min_resumption_dur):
                     human_overlaps_ai = True
                     break
             if human_overlaps_ai:
