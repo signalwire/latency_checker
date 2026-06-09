@@ -952,7 +952,7 @@ class FinalDetector:
             #      earlier human segment ending was a pause, not a real stop.
             # In both cases, pairing with the prior human segment would count
             # a pause as wait time.
-            barge_window = 0.5  # if user resumes within 500ms, it was a pause
+            barge_window = 0.6  # if user resumes within 600ms, it was a pause/collision
             # Resumption-vs-back-channel distinguisher: a real "user was
             # talking, AI cut in, user kept going" segment is substantial
             # (multi-word). A back-channel ("yeah", "mm-hmm") during the
