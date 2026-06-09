@@ -1012,13 +1012,27 @@ class FinalDetector:
             if h_seg.full_duration < min_human_dur:
                 continue
             human_overlaps_ai = False
-            for a in ai_segments:
+            # If the human started while an AI turn was still going, the
+            # human barged that AI turn — it got an immediate (overlapping)
+            # response. Remember which AI segment so we can consume it: a
+            # LATER fragment of this same human turn must not then be paired
+            # back to it, which would report the human's own talk time as a
+            # long "wait" (e.g. AI ends 16.36, human already talking since
+            # 15.72, next clean human fragment at 25.00 → bogus 8.64s).
+            barged_ai_idx = None
+            for idx, a in enumerate(ai_segments):
                 if a.start_time > h_seg.start_time + barge_window:
                     break
                 if a.full_duration < min_ai_dur:
                     continue
                 if a.start_time <= h_seg.start_time <= a.end_time + 0.005:
                     human_overlaps_ai = True
+                    # Only consume the AI turn if this barge is a substantial
+                    # turn (the human took over), not a brief back-channel
+                    # ("mm-hmm") during the AI's turn — otherwise we'd wrongly
+                    # suppress the genuine response that follows the AI's end.
+                    if h_seg.full_duration >= min_resumption_dur:
+                        barged_ai_idx = idx
                     break
                 # AI resumes within the barge window after the human
                 # onset — only count as a real resumption if substantial,
@@ -1028,6 +1042,10 @@ class FinalDetector:
                     human_overlaps_ai = True
                     break
             if human_overlaps_ai:
+                # Consume the AI turn the human barged (and anything before
+                # it) so no later human fragment can pair back to it.
+                if barged_ai_idx is not None:
+                    a_ptr = max(a_ptr, barged_ai_idx + 1)
                 continue
             best_idx = None
             while a_ptr < len(ai_segments) and ai_segments[a_ptr].end_time < h_seg.start_time:
