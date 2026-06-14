@@ -74,6 +74,7 @@ class FinalDetector:
                  energy_threshold: float = 50.0,
                  ai_min_speaking_ms: int = 20,  # AI needs only 20ms (2 chunks)
                  human_min_speaking_ms: int = 20,  # Human also needs only 20ms (2 chunks)
+                 onset_peak_mult: float = 5.0,  # onset gate = energy_threshold * this
                  min_silence_ms: int = 2000,  # 2s for proper turn detection
                  crosstalk_ratio: float = 3.0,  # energy ratio fallback for suppression
                  crosstalk_window_ms: int = 500,  # rolling window for activity density
@@ -105,6 +106,7 @@ class FinalDetector:
         self.energy_threshold = energy_threshold
         self.ai_min_speaking_ms = ai_min_speaking_ms
         self.human_min_speaking_ms = human_min_speaking_ms
+        self.onset_peak_mult = onset_peak_mult
         self.min_silence_ms = min_silence_ms
         self.crosstalk_ratio = crosstalk_ratio
         self.crosstalk_window_chunks = max(1, crosstalk_window_ms // 10)  # 10ms chunks
@@ -628,8 +630,12 @@ class FinalDetector:
         # Onset energy requirement: a new speaking segment must have at least
         # one chunk with energy >= threshold * onset_peak_multiplier within
         # the onset window. Prevents triggering on sustained low-level noise
-        # (bleed, hum, background) that merely crosses the threshold.
-        onset_peak_mult = 5.0
+        # (bleed, hum, background) that merely crosses the threshold. Note the
+        # noise floor that matters in practice is codec comfort-noise (Opus
+        # CNG) on the AI channel, whose 10ms peaks reach ~1000-1250 on a 16k
+        # mp3 — well above the default 5x (=250) gate — so callers that need
+        # the onset to land on real speech rather than CNG raise this.
+        onset_peak_mult = self.onset_peak_mult
 
         # Segment trimming: when closing a segment, truncate end time to
         # the last chunk whose energy exceeded threshold * trim_mult. This
