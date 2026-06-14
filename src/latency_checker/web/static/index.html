@@ -315,6 +315,7 @@
   <div class="controls">
     <label>Threshold: <input type="number" id="threshold" value="50" step="10"></label>
     <label>Min silence (ms): <input type="number" id="min-silence" value="500" step="100"></label>
+    <label title="Onset gate as a multiple of threshold. Raise it when codec comfort-noise on the AI channel trips false onsets.">Onset peak ×: <input type="number" id="onset-peak-mult" value="5" step="1" min="1"></label>
   </div>
 
   <div id="error-msg"></div>
@@ -469,6 +470,7 @@ async function uploadFile(file) {
 
   const threshold = document.getElementById('threshold').value;
   const minSilence = document.getElementById('min-silence').value;
+  const onsetPeakMult = document.getElementById('onset-peak-mult').value;
 
   try {
     // Hash the file locally first. If the server already has a cached
@@ -478,7 +480,7 @@ async function uploadFile(file) {
     const hash = await sha1Hex(file);
 
     loading.innerHTML = '<span class="spinner"></span>Checking cache...';
-    const params = `hash=${hash}&threshold=${threshold}&min_silence_ms=${minSilence}&filename=${encodeURIComponent(file.name)}`;
+    const params = `hash=${hash}&threshold=${threshold}&min_silence_ms=${minSilence}&onset_peak_mult=${onsetPeakMult}&filename=${encodeURIComponent(file.name)}`;
     const cacheResp = await fetch(`check_cache?${params}`);
     if (cacheResp.ok) {
       const data = await cacheResp.json();
@@ -491,7 +493,7 @@ async function uploadFile(file) {
     loading.innerHTML = '<span class="spinner"></span>Uploading & analyzing...';
     const form = new FormData();
     form.append('file', file);
-    const resp = await fetch(`analyze?threshold=${threshold}&min_silence_ms=${minSilence}`, {
+    const resp = await fetch(`analyze?threshold=${threshold}&min_silence_ms=${minSilence}&onset_peak_mult=${onsetPeakMult}`, {
       method: 'POST',
       body: form,
     });

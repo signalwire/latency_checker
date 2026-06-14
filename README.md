@@ -71,6 +71,7 @@ audio-analyze call.wav -o results.json --format json --quiet
 | `--ai-min-speaking` | `20` | ms of sustained AI energy before speech onset |
 | `--human-min-speaking` | `20` | ms of sustained Human energy before speech onset |
 | `--min-silence, -x` | `2000` | ms of silence to mark speech end (turn boundary) |
+| `--onset-peak-mult` | `5.0` | Onset gate as a multiple of threshold; a new segment needs a chunk above `threshold × this`. Raise it when codec comfort-noise (e.g. Opus CNG) on the AI channel trips false onsets |
 | `--crosstalk-ratio, -c` | `3.0` | Suppress weaker channel when stronger is Nx louder; `0` disables |
 | `--sample-rate, -r` | source | Resample to this rate (Hz) before analysis |
 | `--output, -o` | — | Write results to this path |
@@ -109,7 +110,7 @@ Open the printed URL in a browser and drop an audio file on the page.
 - **Collapsible lists** — H→AI latencies, AI→H response times, AI segments, and Human segments. Click any header to expand; click a row to seek.
 - **Export** — JSON and CSV download buttons in the Statistics panel.
 - **Playback controls** — Play/Pause (or **spacebar**), prev/next latency, zoom slider, and a millisecond-precision hover time readout.
-- **Parameters** — Threshold and min-silence inputs above the waveform are used on the next upload.
+- **Parameters** — Threshold, min-silence, and onset-peak-× inputs above the waveform are used on the next upload (each value is part of the analysis cache key).
 - **Clear** — removes the current cached entry and resets the page.
 
 ### Caching

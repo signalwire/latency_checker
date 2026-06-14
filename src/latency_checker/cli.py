@@ -15,6 +15,10 @@ from latency_checker.analyzer import AudioAnalyzer
               help='Minimum milliseconds for human to start speaking (default: 20)')
 @click.option('--min-silence', '-x', default=2000, type=int,
               help='Minimum milliseconds to stop speaking (default: 2000)')
+@click.option('--onset-peak-mult', default=5.0, type=float,
+              help='Onset gate as a multiple of threshold; a new segment needs a '
+                   'chunk above threshold*this. Raise it when codec comfort-noise '
+                   'trips onsets (default: 5.0)')
 @click.option('--output', '-o', type=click.Path(),
               help='Output file path for results')
 @click.option('--format', type=click.Choice(['json', 'txt', 'md', 'both']), default='txt',
@@ -25,7 +29,7 @@ from latency_checker.analyzer import AudioAnalyzer
               help='Suppress weaker channel when stronger has N times more energy (default: 3.0, 0 to disable)')
 @click.option('--quiet', '-q', is_flag=True,
               help='Suppress console output (only write to file)')
-def analyze_audio(audio_file, threshold, ai_min_speaking, human_min_speaking, min_silence, output, format, sample_rate, crosstalk_ratio, quiet):
+def analyze_audio(audio_file, threshold, ai_min_speaking, human_min_speaking, min_silence, onset_peak_mult, output, format, sample_rate, crosstalk_ratio, quiet):
     """
     Analyze audio file for AI/Human conversation and response latency.
 
@@ -38,7 +42,7 @@ def analyze_audio(audio_file, threshold, ai_min_speaking, human_min_speaking, mi
     try:
         if not quiet:
             click.echo(f"Analyzing: {audio_file}")
-            click.echo(f"Settings: threshold={threshold}, ai_min={ai_min_speaking}ms, human_min={human_min_speaking}ms, silence={min_silence}ms")
+            click.echo(f"Settings: threshold={threshold}, ai_min={ai_min_speaking}ms, human_min={human_min_speaking}ms, silence={min_silence}ms, onset_peak_mult={onset_peak_mult}")
             click.echo("-" * 60)
 
         analyzer = AudioAnalyzer(
@@ -46,6 +50,7 @@ def analyze_audio(audio_file, threshold, ai_min_speaking, human_min_speaking, mi
             energy_threshold=threshold,
             ai_min_speaking_ms=ai_min_speaking,
             human_min_speaking_ms=human_min_speaking,
+            onset_peak_mult=onset_peak_mult,
             min_silence_ms=min_silence,
             crosstalk_ratio=crosstalk_ratio
         )

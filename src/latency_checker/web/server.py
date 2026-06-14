@@ -85,14 +85,18 @@ def _evict_old_cache_entries():
             pass
 
 
-def _params_digest(threshold: float, min_silence_ms: int) -> str:
-    """Short hex digest of the analysis params for cache key suffixing."""
-    raw = f"t={threshold}|s={min_silence_ms}".encode()
+def _params_digest(threshold: float, min_silence_ms: int, onset_peak_mult: float) -> str:
+    """Short hex digest of the analysis params for cache key suffixing.
+
+    Every param that changes the analysis output must be included, or a
+    cached result computed with different params would be served stale.
+    """
+    raw = f"t={threshold}|s={min_silence_ms}|o={onset_peak_mult}".encode()
     return hashlib.sha1(raw).hexdigest()[:8]
 
 
-def _analysis_path(token: str, threshold: float, min_silence_ms: int) -> Path:
-    return CACHE_DIR / f"{token}.{_params_digest(threshold, min_silence_ms)}.json"
+def _analysis_path(token: str, threshold: float, min_silence_ms: int, onset_peak_mult: float) -> Path:
+    return CACHE_DIR / f"{token}.{_params_digest(threshold, min_silence_ms, onset_peak_mult)}.json"
 
 
 def _playback_path(token: str) -> Path:
@@ -141,6 +145,7 @@ def check_cache(
     hash: str,
     threshold: float = 50.0,
     min_silence_ms: int = 2000,
+    onset_peak_mult: float = 5.0,
     filename: str | None = None,
 ):
     """Check if a file with this SHA-1 is already cached with these params.
@@ -153,7 +158,7 @@ def check_cache(
     if not _valid_token(hash):
         raise HTTPException(status_code=400, detail="Invalid hash")
     playback_path = _playback_path(hash)
-    analysis_path = _analysis_path(hash, threshold, min_silence_ms)
+    analysis_path = _analysis_path(hash, threshold, min_silence_ms, onset_peak_mult)
     if not playback_path.exists() or not analysis_path.exists():
         raise HTTPException(status_code=404, detail="Not cached")
     try:
@@ -174,6 +179,7 @@ async def analyze(
     file: UploadFile = File(...),
     threshold: float = 50.0,
     min_silence_ms: int = 2000,
+    onset_peak_mult: float = 5.0,
 ):
     """Accept an audio upload, run analysis, return results + audio URL.
 
@@ -217,7 +223,7 @@ async def analyze(
     tmp_path = Path(tmp.name)
     token = hasher.hexdigest()
     playback_path = _playback_path(token)
-    analysis_path = _analysis_path(token, threshold, min_silence_ms)
+    analysis_path = _analysis_path(token, threshold, min_silence_ms, onset_peak_mult)
 
     try:
         cache_hit = playback_path.exists() and analysis_path.exists()
@@ -230,6 +236,7 @@ async def analyze(
                 file_path=str(tmp_path),
                 energy_threshold=threshold,
                 min_silence_ms=min_silence_ms,
+                onset_peak_mult=onset_peak_mult,
             )
             result = analyzer.analyze()
 
