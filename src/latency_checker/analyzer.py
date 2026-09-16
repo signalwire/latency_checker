@@ -14,6 +14,7 @@ class AudioAnalyzer:
                  ai_min_speaking_ms: int = 20,  # AI needs only 20ms to start
                  human_min_speaking_ms: int = 20,  # Human also needs only 20ms
                  onset_peak_mult: float = 5.0,  # onset gate = energy_threshold * this
+                 onset_rel_frac: float = 0.10,  # onset must reach this fraction of its segment peak
                  min_silence_ms: int = 2000,
                  crosstalk_ratio: float = 3.0):
         """
@@ -33,6 +34,7 @@ class AudioAnalyzer:
         self.ai_min_speaking_ms = ai_min_speaking_ms
         self.human_min_speaking_ms = human_min_speaking_ms
         self.onset_peak_mult = onset_peak_mult
+        self.onset_rel_frac = onset_rel_frac
         self.min_silence_ms = min_silence_ms
         self.crosstalk_ratio = crosstalk_ratio
 
@@ -70,6 +72,7 @@ class AudioAnalyzer:
             ai_min_speaking_ms=self.ai_min_speaking_ms,
             human_min_speaking_ms=self.human_min_speaking_ms,
             onset_peak_mult=self.onset_peak_mult,
+            onset_rel_frac=self.onset_rel_frac,
             min_silence_ms=self.min_silence_ms,
             crosstalk_ratio=self.crosstalk_ratio
         )

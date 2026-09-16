@@ -75,6 +75,7 @@ class FinalDetector:
                  ai_min_speaking_ms: int = 20,  # AI needs only 20ms (2 chunks)
                  human_min_speaking_ms: int = 20,  # Human also needs only 20ms (2 chunks)
                  onset_peak_mult: float = 5.0,  # onset gate = energy_threshold * this
+                 onset_rel_frac: float = 0.10,  # onset must reach this fraction of its segment peak
                  min_silence_ms: int = 2000,  # 2s for proper turn detection
                  crosstalk_ratio: float = 3.0,  # energy ratio fallback for suppression
                  crosstalk_window_ms: int = 500,  # rolling window for activity density
@@ -107,6 +108,7 @@ class FinalDetector:
         self.ai_min_speaking_ms = ai_min_speaking_ms
         self.human_min_speaking_ms = human_min_speaking_ms
         self.onset_peak_mult = onset_peak_mult
+        self.onset_rel_frac = onset_rel_frac
         self.min_silence_ms = min_silence_ms
         self.crosstalk_ratio = crosstalk_ratio
         self.crosstalk_window_chunks = max(1, crosstalk_window_ms // 10)  # 10ms chunks
@@ -613,6 +615,43 @@ class FinalDetector:
         # RIGHT is AI, LEFT is Human
         return self.detect_turns(right_channel, left_channel)
 
+    def _refine_onset(self, seg: SpeechSegment, energies: list) -> None:
+        """Pull a segment's start forward to where its real speech begins.
+
+        The onset is the first sustained run of chunks reaching
+        ``onset_rel_frac`` of the segment's own peak energy. Only ever moves
+        the start later, never past the segment end, and leaves the segment
+        untouched when no such run exists. ``full_duration`` is re-based on the
+        new start so min-duration qualification keeps the same meaning.
+        """
+        chunk_s = self.chunk_ms / 1000.0
+        i0 = int(round(seg.start_time / chunk_s))
+        i1 = min(len(energies), int(round(seg.end_time / chunk_s)) + 1)
+        if i1 - i0 < 2:
+            return
+        window = energies[i0:i1]
+        peak = max(window)
+        if peak <= 0:
+            return
+        gate = peak * self.onset_rel_frac
+        # Same rationale as min_strong_run_chunks on the trailing edge: a
+        # single chunk can be a spike, so require 30ms of sustained level.
+        run_required = 3
+        run = 0
+        for k, energy in enumerate(window):
+            if energy >= gate:
+                run += 1
+                if run >= run_required:
+                    new_start = (i0 + k - run_required + 1) * chunk_s
+                    if seg.start_time < new_start < seg.end_time:
+                        full_end = seg.start_time + seg.full_duration
+                        seg.start_time = new_start
+                        seg.duration = seg.end_time - new_start
+                        seg.full_duration = max(full_end - new_start, seg.duration)
+                    return
+            else:
+                run = 0
+
     def detect_turns(self,
                      ai_channel: np.ndarray,      # RIGHT channel
                      human_channel: np.ndarray) -> Dict:  # LEFT channel
@@ -700,6 +739,11 @@ class FinalDetector:
         # We'll calculate latencies after detecting all segments
         latencies = []
 
+        # Per-chunk energies after crosstalk suppression -- exactly what the
+        # state machine saw -- retained for onset refinement below.
+        ai_energies: list = []
+        human_energies: list = []
+
         # Rolling activity windows for crosstalk suppression
         ai_activity = deque(maxlen=self.crosstalk_window_chunks)
         human_activity = deque(maxlen=self.crosstalk_window_chunks)
@@ -741,6 +785,11 @@ class FinalDetector:
             # inflate the weaker channel's density
             ai_activity.append(ai_energy > ai_threshold)
             human_activity.append(human_energy > human_threshold)
+
+            # Keep the post-suppression energies: a segment's onset is refined
+            # against its own peak once the segment is known (_refine_onset).
+            ai_energies.append(ai_energy)
+            human_energies.append(human_energy)
 
             # Track last above-threshold chunk for end-of-file handling
             if ai_energy > ai_threshold:
@@ -928,6 +977,21 @@ class FinalDetector:
                     duration=human_end - human_segment_start,
                     full_duration=max(full_end, human_end) - human_segment_start
                 ))
+
+        # Refine segment onsets before measuring anything from them. The state
+        # machine opens a segment as soon as one chunk clears an ABSOLUTE gate
+        # (energy_threshold * onset_peak_mult), which a brief pre-speech
+        # transient can do: a codec/DTX click or TTS buffer artifact measuring
+        # 4-14k where that segment's real speech runs 66-134k. Measured across
+        # 30 calls that placed the reported AI onset up to 3s early, making the
+        # agent look like it answered before its own first_audio stamp.
+        # A transient is separable from speech by its level RELATIVE TO THE
+        # SEGMENT, not by any absolute floor -- hence onset_rel_frac.
+        if self.onset_rel_frac > 0:
+            for segs, energies in ((ai_segments, ai_energies),
+                                   (human_segments, human_energies)):
+                for seg in segs:
+                    self._refine_onset(seg, energies)
 
         # Post-process: Calculate latencies from segments.
         # Single forward pass: for each AI segment, consume the most recent
